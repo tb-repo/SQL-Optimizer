@@ -1,0 +1,1127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQL Optimizer</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --bs-primary: #2563eb;
+            --bs-primary-rgb: 37, 99, 235;
+            --modern-info: #0ea5e9;
+            --modern-success: #22c55e;
+            --modern-warning: #facc15;
+            --modern-danger: #ef4444;
+            --modern-muted: #6c757d;
+            --modern-bg: #f8f9fa;
+            
+            /* Light mode colors */
+            --bg-primary: #f8fafc;
+            --bg-secondary: #ffffff;
+            --text-primary: #1f2937;
+            --text-secondary: #6b7280;
+            --border-color: #e5e7eb;
+            --card-bg: #ffffff;
+            --input-bg: #ffffff;
+            --input-border: #d1d5db;
+            --highlight-bg: linear-gradient(135deg, #e0e7ff 0%, #f8fafc 100%);
+        }
+        
+        [data-theme="dark"] {
+            --bg-primary: #111827;
+            --bg-secondary: #1f2937;
+            --text-primary: #f9fafb;
+            --text-secondary: #d1d5db;
+            --border-color: #374151;
+            --card-bg: #1f2937;
+            --input-bg: #374151;
+            --input-border: #4b5563;
+            --highlight-bg: linear-gradient(135deg, #1e3a8a 0%, #111827 100%);
+        }
+        
+        body {
+            background: var(--highlight-bg);
+            min-height: 100vh;
+            color: var(--text-primary);
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+        .card {
+            border-radius: 0.5rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            transition: background-color 0.3s ease, border-color 0.3s ease;
+        }
+        
+        .form-control {
+            background-color: var(--input-bg);
+            border-color: var(--input-border);
+            color: var(--text-primary);
+            transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+        }
+        
+        .form-control:focus {
+            background-color: var(--input-bg);
+            border-color: var(--bs-primary);
+            color: var(--text-primary);
+            box-shadow: 0 0 0 0.2rem rgba(var(--bs-primary-rgb), 0.25);
+        }
+        
+        .form-control::placeholder {
+            color: var(--text-secondary);
+        }
+        
+        .alert {
+            background-color: var(--card-bg);
+            border-color: var(--border-color);
+            color: var(--text-primary);
+            transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+        }
+        
+        /* Template Library Styles */
+        .template-card {
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            cursor: pointer;
+        }
+        
+        .template-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        
+        .template-meta {
+            margin-top: 0.5rem;
+        }
+        
+        .modal-xl {
+            max-width: 90%;
+        }
+        
+        pre {
+            background-color: var(--input-bg);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+        }
+        
+        .badge {
+            font-size: 0.75rem;
+        }
+        .required-label {
+            color: var(--modern-danger);
+        }
+        .optional-label {
+            color: var(--modern-muted);
+        }
+        .section-header {
+            background: var(--bs-primary);
+            color: #fff;
+            border-radius: 0.5rem 0.5rem 0 0;
+            padding: 0.75rem 1rem;
+            font-size: 1.1rem;
+            font-weight: 500;
+        }
+        /* Ensure SQL validation feedback is always visible */
+        #sql_query_feedback {
+            display: block;
+            margin-top: 0.5em;
+            font-size: 1em;
+            font-weight: 500;
+            min-height: 0;
+        }
+        #sticky-analyze-btn {
+            position: fixed;
+            right: 24px;
+            bottom: 24px;
+            z-index: 2000;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+            border-radius: 0.5rem;
+            background: #2563eb;
+            color: #fff;
+            font-size: 1.1rem;
+            padding: 0.75em 2em;
+            transition: opacity 0.2s, background 0.2s, box-shadow 0.2s;
+            opacity: 0.4;
+        }
+        #sticky-analyze-btn:hover, #sticky-analyze-btn:focus {
+            background: #1746a0;
+            box-shadow: 0 4px 16px rgba(37,99,235,0.18);
+            color: #fff;
+            outline: none;
+            opacity: 1;
+        }
+
+        @media (max-width: 575.98px) {
+            #sticky-analyze-btn {
+                display: none;
+            }
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/sql-formatter@12.2.3/dist/sql-formatter.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <script src="{{ url_for('static', filename='wordlist.js') }}"></script>
+    <script src="{{ url_for('static', filename='tips.js') }}"></script>
+    <script src="{{ url_for('static', filename='scripts.js') }}"></script>
+</head>
+<body>
+<div class="container mt-5">
+    {% if cleared %}
+    <div class="alert alert-success alert-dismissible fade show" role="alert">
+        <i class="fas fa-check-circle me-2"></i>
+        <strong>Success!</strong> Analysis history has been cleared successfully.
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+    {% endif %}
+    
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1 class="mb-0">SQL Query Performance Analyzer</h1>
+        <div class="d-flex align-items-center">
+            <button id="dark-mode-toggle" class="btn btn-outline-secondary btn-sm me-2" title="Toggle Dark Mode">
+                <i class="fas fa-moon" id="dark-mode-icon"></i>
+            </button>
+            <button id="template-library-btn" class="btn btn-outline-success btn-sm me-2" title="Query Templates">
+                <i class="fas fa-book me-1"></i>Templates
+            </button>
+            <a href="/analytics" class="btn btn-outline-warning btn-sm me-2" title="Analytics Dashboard">
+                <i class="fas fa-chart-bar me-1"></i>Analytics
+            </a>
+            <a href="/compare" class="btn btn-outline-info btn-sm me-2" title="Query Comparison">
+                <i class="fas fa-balance-scale me-1"></i>Compare
+            </a>
+            <a href="/help" class="btn btn-outline-info btn-sm">
+                <i class="fas fa-question-circle me-1"></i>Help Guide
+            </a>
+        </div>
+    </div>
+    
+    <!-- Highlight-style "Did you know?" section -->
+    <div id="engine-tips-list-container" class="mb-4">
+      <div class="did-you-know-highlight">
+        <div class="did-you-know-header">
+          <i class="fas fa-lightbulb me-2"></i>
+          <span class="did-you-know-title">Did you know?</span>
+          <span class="did-you-know-subtitle">Best Practices for <span id="engine-tips-engine">PostgreSQL</span></span>
+        </div>
+        <div class="did-you-know-content">
+          <div id="engine-tips-single" class="did-you-know-text"></div>
+          <div class="did-you-know-progress">
+            <div class="did-you-know-progress-bar"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <div class="alert alert-info mb-4">
+        <span class="required-label">*</span> Required fields &nbsp; <span class="optional-label">(optional)</span> Optional fields
+    </div>
+            <form method="POST" novalidate>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+        {{ form.hidden_tag() }}
+        <!-- SQL Query Section - Blue theme -->
+        <div class="section-highlight sql-query-highlight">
+            <div class="section-highlight-header">
+                <i class="fas fa-code me-2"></i>
+                <span class="section-highlight-title">1. SQL Query</span>
+                <span class="section-highlight-subtitle"><span class="required-label">*</span> Required</span>
+            </div>
+            <div class="section-highlight-content">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <label class="form-label mb-0 text-white" for="sql_query_textarea">{{ form.sql_query.label.text }}</label>
+                    <div>
+                        <button type="button" class="btn btn-light btn-sm me-2" onclick="loadSampleData()" aria-label="Load Sample Data" title="Load a best-practice SQL example for quick testing">
+                            <i class="fas fa-download me-1"></i>Load Sample Data
+                        </button>
+                        <button type="button" class="btn btn-light btn-sm" onclick="beautifySQL()" aria-label="Beautify SQL">
+                            <i class="fas fa-magic me-1"></i>Beautify SQL
+                        </button>
+                    </div>
+                </div>
+                {{ form.sql_query(class="form-control", placeholder=form.sql_query.render_kw.placeholder, rows=form.sql_query.render_kw.rows, id="sql_query_textarea", aria_describedby="sql_query_feedback sql_query_help", title="SQL Query") }}
+                <span id="sql_query_feedback" class="form-text text-white" style="min-height:0;" aria-live="polite"></span>
+                <!-- SQL Syntax Highlight Output -->
+                <div id="cell_input" style="display:none;">
+                  <textarea id="textarea" style="display:none;"></textarea>
+                </div>
+                <div id="cell_output" class="sql-syntax-output" style="min-height:2em; background:rgba(255,255,255,0.1); border-radius:4px; padding:8px; margin-top:8px; font-family:monospace; font-size:1em; color:white;"></div>
+                <div class="form-text text-white" id="sql_query_help">{{ form.sql_query.description }}<br>Example: <code style="background:rgba(255,255,255,0.2); color:white;">SELECT id, name FROM users WHERE status = 'active';</code></div>
+                {% for error in form.sql_query.errors %}
+                    <div class="text-warning">{{ error }}</div>
+                {% endfor %}
+            </div>
+        </div>
+        <!-- Tables Section - Green theme -->
+        <div class="section-highlight tables-highlight">
+            <div class="section-highlight-header">
+                <i class="fas fa-table me-2"></i>
+                <span class="section-highlight-title">2. Tables</span>
+                <span class="section-highlight-subtitle"><span class="optional-label">(optional)</span> For better analysis</span>
+            </div>
+            <div class="section-highlight-content">
+                <div id="tables-container"></div>
+                <button type="button" class="btn btn-light btn-sm" onclick="addTable()">
+                    <i class="fas fa-plus me-1"></i>Add Table
+                </button>
+                <div class="form-text text-white mt-2">For each table, provide the name, DDL, row count, and size (e.g., 1000, 500KB, 2MB, 1.5GB).<br>Example: <code style="background:rgba(255,255,255,0.2); color:white;">users</code>, <code style="background:rgba(255,255,255,0.2); color:white;">CREATE TABLE users (...);</code>, <code style="background:rgba(255,255,255,0.2); color:white;">120000</code>, <code style="background:rgba(255,255,255,0.2); color:white;">500MB</code></div>
+            </div>
+        </div>
+        <!-- Indexes Section - Orange theme -->
+        <div class="section-highlight indexes-highlight">
+            <div class="section-highlight-header">
+                <i class="fas fa-search me-2"></i>
+                <span class="section-highlight-title">3. Indexes</span>
+                <span class="section-highlight-subtitle"><span class="optional-label">(optional)</span> For performance insights</span>
+            </div>
+            <div class="section-highlight-content">
+                <div id="indexes-container"></div>
+                <button type="button" class="btn btn-light btn-sm" onclick="addIndex()">
+                    <i class="fas fa-plus me-1"></i>Add Index
+                </button>
+                <div class="form-text text-white mt-2">For each index, provide the name, table, definition, and size (e.g., 1000, 500KB, 2MB, 1.5GB).<br>Example: <code style="background:rgba(255,255,255,0.2); color:white;">idx_status</code>, <code style="background:rgba(255,255,255,0.2); color:white;">users</code>, <code style="background:rgba(255,255,255,0.2); color:white;">CREATE INDEX idx_status ON users(status);</code>, <code style="background:rgba(255,255,255,0.2); color:white;">50MB</code></div>
+            </div>
+        </div>
+        <div class="alert alert-info mb-4">
+          <strong>Tip:</strong> For a more accurate analysis, please provide your table and index details even though they are optional. This helps us give you better recommendations and insights.
+        </div>
+        <!-- EXPLAIN Plan Section - Purple theme -->
+        <div class="section-highlight explain-highlight">
+            <div class="section-highlight-header">
+                <i class="fas fa-chart-line me-2"></i>
+                <span class="section-highlight-title">4. EXPLAIN Plan</span>
+                <span class="section-highlight-subtitle"><span class="optional-label">(optional)</span> For detailed analysis</span>
+            </div>
+            <div class="section-highlight-content">
+                <label class="form-label text-white" for="explain_plan_textarea">{{ form.explain_plan.label.text }}</label>
+                {{ form.explain_plan(class="form-control", placeholder=form.explain_plan.render_kw.placeholder, rows=form.explain_plan.render_kw.rows, id="explain_plan_textarea", oninput="validateExplain()", aria_describedby="explain_plan_feedback explain_plan_help", title="EXPLAIN Plan") }}
+                <span id="explain_plan_feedback" class="form-text text-white" style="min-height:0;" aria-live="polite"></span>
+                <div class="form-text text-white" id="explain_plan_help">{{ form.explain_plan.description }}</div>
+            </div>
+        </div>
+        <!-- Database Engine Section - Teal theme -->
+        <div class="section-highlight engine-highlight">
+            <div class="section-highlight-header">
+                <i class="fas fa-database me-2"></i>
+                <span class="section-highlight-title">5. Database Engine</span>
+                <span class="section-highlight-subtitle"><span class="required-label">*</span> Required</span>
+            </div>
+            <div class="section-highlight-content">
+                <div class="row">
+                    <div class="col-md-6">
+                        <label class="form-label text-white">{{ form.db_engine.label.text }} <span class="required-label">*</span></label>
+                        <select name="db_engine" class="form-select" id="db_engine_select" required>
+                          {% for value, label in form.db_engine.choices %}
+                            <option value="{{ value }}"
+                              {% if (form.db_engine.data == value) or (not form.db_engine.data and value == 'postgresql') or (form.db_engine.data == 'other' and value == 'postgresql') %}
+                                selected
+                              {% endif %}
+                            >{{ label }}</option>
+                          {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-6 text-end d-flex align-items-end justify-content-end">
+                        <button type="submit" class="btn btn-light btn-lg" id="sticky-analyze-btn" aria-label="Analyze SQL">
+                            <i class="fas fa-rocket me-2"></i>Analyze SQL
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </form>
+  </div>
+  <script>
+function addTable(name = '', ddl = '', rows = '', size = '', hasPrimaryKey = false, primaryKeyColumn = '', hasForeignKey = false, foreignKeyColumn = '', foreignKeyTable = '') {
+    const container = document.getElementById('tables-container');
+    const idx = container.children.length;
+    const div = document.createElement('div');
+    div.className = 'row mb-3 p-3 border rounded';
+    div.innerHTML = `
+        <div class="row mb-2">
+            <div class="col-md-2"><input name="table_name_${idx}" class="form-control" placeholder="Table Name" value="${name}" title="Table Name"></div>
+            <div class="col-md-4"><input name="table_ddl_${idx}" class="form-control" placeholder="CREATE TABLE DDL" value="${ddl}" oninput="validateDDL(this)" title="CREATE TABLE DDL"><span class="form-text ddl-feedback"></span></div>
+            <div class="col-md-2"><input name="table_rows_${idx}" class="form-control" placeholder="Row Count" value="${rows}" title="Row Count"></div>
+            <div class="col-md-2"><input name="table_size_${idx}" class="form-control" placeholder="Size (e.g., 500KB, 2GB)" value="${size}" title="Table Size"></div>
+            <div class="col-md-1"><button type="button" class="btn btn-danger btn-sm" onclick="this.parentElement.parentElement.parentElement.remove()">&times;</button></div>
+        </div>
+        <div class="row mb-2">
+            <div class="col-md-3">
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="table_has_primary_${idx}" id="table_has_primary_${idx}" ${hasPrimaryKey ? 'checked' : ''} onchange="togglePrimaryKeyFields(${idx})">
+                    <label class="form-check-label text-white" for="table_has_primary_${idx}">
+                        <i class="fas fa-key me-1"></i>Has Primary Key
+                    </label>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <input name="table_primary_key_${idx}" class="form-control" placeholder="Primary Key Column" value="${primaryKeyColumn}" title="Primary Key Column Name" ${hasPrimaryKey ? '' : 'disabled'}>
+            </div>
+            <div class="col-md-3">
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="table_has_foreign_${idx}" id="table_has_foreign_${idx}" ${hasForeignKey ? 'checked' : ''} onchange="toggleForeignKeyFields(${idx})">
+                    <label class="form-check-label text-white" for="table_has_foreign_${idx}">
+                        <i class="fas fa-link me-1"></i>Has Foreign Key
+                    </label>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <input name="table_foreign_key_${idx}" class="form-control" placeholder="Foreign Key Column" value="${foreignKeyColumn}" title="Foreign Key Column Name" ${hasForeignKey ? '' : 'disabled'}>
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-md-6">
+                <input name="table_foreign_table_${idx}" class="form-control" placeholder="Referenced Table Name" value="${foreignKeyTable}" title="Referenced Table Name" ${hasForeignKey ? '' : 'disabled'}>
+            </div>
+            <div class="col-md-6">
+                <small class="text-white-50">
+                    <i class="fas fa-info-circle me-1"></i>
+                    Primary/Foreign key info helps provide better optimization recommendations
+                </small>
+            </div>
+        </div>
+    `;
+    container.appendChild(div);
+    // Re-initialize Bootstrap tooltips for new inputs
+    if (window.bootstrap && bootstrap.Tooltip) {
+      var newInputs = div.querySelectorAll('[title]');
+      newInputs.forEach(function (el) {
+        new bootstrap.Tooltip(el);
+      });
+    }
+}
+
+function togglePrimaryKeyFields(idx) {
+    const checkbox = document.getElementById(`table_has_primary_${idx}`);
+    const primaryKeyInput = document.querySelector(`input[name="table_primary_key_${idx}"]`);
+    if (checkbox.checked) {
+        primaryKeyInput.disabled = false;
+        primaryKeyInput.focus();
+    } else {
+        primaryKeyInput.disabled = true;
+        primaryKeyInput.value = '';
+    }
+}
+
+function toggleForeignKeyFields(idx) {
+    const checkbox = document.getElementById(`table_has_foreign_${idx}`);
+    const foreignKeyInput = document.querySelector(`input[name="table_foreign_key_${idx}"]`);
+    const foreignTableInput = document.querySelector(`input[name="table_foreign_table_${idx}"]`);
+    if (checkbox.checked) {
+        foreignKeyInput.disabled = false;
+        foreignTableInput.disabled = false;
+        foreignKeyInput.focus();
+    } else {
+        foreignKeyInput.disabled = true;
+        foreignTableInput.disabled = true;
+        foreignKeyInput.value = '';
+        foreignTableInput.value = '';
+    }
+}
+
+function addIndex(name = '', table = '', def = '', size = '') {
+    const container = document.getElementById('indexes-container');
+    const idx = container.children.length;
+    const div = document.createElement('div');
+    div.className = 'row mb-2';
+    div.innerHTML = `
+        <div class="col-md-2"><input name="index_name_${idx}" class="form-control" placeholder="Index Name" value="${name}" title="Index Name"></div>
+        <div class="col-md-2"><input name="index_table_${idx}" class="form-control" placeholder="Table" value="${table}" title="Table"></div>
+        <div class="col-md-5"><input name="index_def_${idx}" class="form-control" placeholder="CREATE INDEX DDL" value="${def}" oninput="validateIndexDDL(this)" title="CREATE INDEX DDL"><span class="form-text indexddl-feedback"></span></div>
+        <div class="col-md-2"><input name="index_size_${idx}" class="form-control" placeholder="Size (e.g., 1000, 500KB, 2MB, 1.5GB)" value="${size}" title="Index Size (e.g., 1000, 500KB, 2MB, 1.5GB)"></div>
+        <div class="col-md-1"><button type="button" class="btn btn-danger btn-sm" onclick="this.parentElement.parentElement.remove()">&times;</button></div>
+    `;
+    container.appendChild(div);
+    // Re-initialize Bootstrap tooltips for new inputs
+    if (window.bootstrap && bootstrap.Tooltip) {
+      var newInputs = div.querySelectorAll('[title]');
+      newInputs.forEach(function (el) {
+        new bootstrap.Tooltip(el);
+      });
+    }
+}
+window.onload = function() {
+    {% if tables %}
+        {% for t in tables %}
+            addTable("{{ t.name|e }}", "{{ t.ddl|e }}", "{{ t.rows|e }}", "{{ t.size|e if t.size is defined else '' }}");
+        {% endfor %}
+    {% else %}
+        addTable();
+    {% endif %}
+    {% if indexes %}
+        {% for i in indexes %}
+            addIndex("{{ i.name|e }}", "{{ i.table|e }}", "{{ i.definition|e }}", "{{ i.size|e if i.size is defined else '' }}");
+        {% endfor %}
+    {% else %}
+        addIndex();
+    {% endif %}
+};
+function beautifySQL() {
+    var textarea = document.getElementById('sql_query_textarea');
+    var sql = textarea.value.trim();
+    if (!sql) {
+        alert('SQL Query is empty.');
+        return;
+    }
+    // Beautify
+    try {
+        sql = window.sqlFormatter.format(sql, { language: 'sql' });
+    } catch (e) {
+        alert('Beautify error: ' + e);
+        return;
+    }
+    // Ensure semicolon at the end (ignoring whitespace/comments)
+    var sqlNoComments = sql.replace(/(--.*?$|\/\*.*?\*\/)/gm, '').trim();
+    if (!sqlNoComments.endsWith(';')) {
+        sql = sql.trim().replace(/;+$/, '') + ';';
+    }
+    textarea.value = sql;
+}
+function validateDDL(input) {
+    const val = input.value.trim();
+    const feedback = input.parentElement.querySelector('.ddl-feedback');
+    if (!val) { feedback.textContent = ''; feedback.style.color = ''; return; }
+    if (/^CREATE\s+TABLE\s+/i.test(val)) {
+        feedback.textContent = 'Valid CREATE TABLE DDL.';
+        feedback.style.color = '#22c55e';
+    } else {
+        feedback.textContent = 'Expected CREATE TABLE DDL.';
+        feedback.style.color = '#ef4444';
+    }
+}
+function validateIndexDDL(input) {
+    const val = input.value.trim();
+    const feedback = input.parentElement.querySelector('.indexddl-feedback');
+    if (!val) { feedback.textContent = ''; feedback.style.color = ''; return; }
+    if (/^CREATE\s+INDEX\s+/i.test(val)) {
+        feedback.textContent = 'Valid CREATE INDEX DDL.';
+        feedback.style.color = '#22c55e';
+    } else {
+        feedback.textContent = 'Expected CREATE INDEX DDL.';
+        feedback.style.color = '#ef4444';
+    }
+}
+function validateExplain() {
+    const textarea = document.getElementById('explain_plan_textarea');
+    const feedback = document.getElementById('explain_plan_feedback');
+    const engine = document.getElementById('db_engine_select').value;
+    const val = textarea.value.trim();
+    if (!val) { feedback.textContent = ''; feedback.style.color = ''; return; }
+    let valid = false, msg = '';
+    if (engine === 'postgresql') {
+        valid = /Seq Scan|Index Scan|Bitmap Heap Scan|Bitmap Index Scan/.test(val);
+        msg = valid ? 'Valid PostgreSQL EXPLAIN plan.' : 'Expected PostgreSQL EXPLAIN plan (look for Seq Scan, Index Scan, etc.).';
+    } else if (engine === 'mysql') {
+        valid = /select_type|table|type|possible_keys|key|rows/i.test(val);
+        msg = valid ? 'Valid MySQL EXPLAIN plan.' : 'Expected MySQL EXPLAIN plan (look for select_type, table, etc.).';
+    } else if (engine === 'sqlserver') {
+        valid = /Clustered Index Scan|Table Scan|Index Seek/i.test(val);
+        msg = valid ? 'Valid SQL Server EXPLAIN plan.' : 'Expected SQL Server EXPLAIN plan (look for Clustered Index Scan, etc.).';
+    } else if (engine === 'oracle') {
+        valid = /\|\s*Id\s*\|.*Operation.*\|/i.test(val) || /TABLE ACCESS FULL|INDEX RANGE SCAN/i.test(val);
+        msg = valid ? 'Valid Oracle EXPLAIN plan.' : 'Expected Oracle EXPLAIN plan (look for Operation, TABLE ACCESS FULL, etc.).';
+    } else if (engine === 'sqlite') {
+        valid = /SCAN TABLE|SEARCH TABLE/i.test(val);
+        msg = valid ? 'Valid SQLite EXPLAIN plan.' : 'Expected SQLite EXPLAIN plan (look for SCAN TABLE, etc.).';
+    } else {
+        valid = !!val;
+        msg = valid ? 'EXPLAIN plan entered.' : 'Paste your EXPLAIN plan.';
+    }
+    feedback.textContent = msg;
+    feedback.style.color = valid ? '#22c55e' : '#ef4444';
+}
+document.getElementById('explain_plan_textarea').addEventListener('input', validateExplain);
+document.getElementById('db_engine_select').addEventListener('change', validateExplain);
+// Force PostgreSQL as default if nothing is selected
+window.addEventListener('DOMContentLoaded', function() {
+    var select = document.querySelector('select[name="db_engine"]');
+    if (select && (!select.value || select.value === 'other')) {
+        select.value = 'postgresql';
+    }
+});
+const explainExamples = {
+  postgresql: "Seq Scan on users  (cost=0.00..431.00 rows=21000 width=4)\n  Filter: (status = 'active')",
+  mysql: "id: 1\nselect_type: SIMPLE\ntable: users\ntype: ALL\npossible_keys: NULL\nkey: NULL\nrows: 100000",
+  sqlserver: "|--Clustered Index Scan(OBJECT:([dbo].[users].[PK_users]))",
+  oracle: "| Id  | Operation           | Name  | Rows  | Bytes | Cost |\n|   0 | SELECT STATEMENT    |       |     1 |    26 |     2 |\n|*  1 |  TABLE ACCESS FULL  | USERS |     1 |    26 |     2 |",
+  sqlite: "SCAN TABLE users",
+  other: "Paste your EXPLAIN plan here."
+};
+document.getElementById('db_engine_select').addEventListener('change', function() {
+  const engine = this.value;
+  const textarea = document.getElementById('explain_plan_textarea');
+  textarea.placeholder = explainExamples[engine] || explainExamples['other'];
+});
+function checkForMisspelledKeywords(sql, reservedWords) {
+    // Tokenize by whitespace and punctuation
+    const tokens = sql.split(/\s+|[(),;]/).filter(Boolean);
+    const reservedSet = new Set(reservedWords.map(w => w.toUpperCase()));
+    let errors = [];
+    tokens.forEach(token => {
+        // If it looks like a keyword (all caps, >2 chars), but not in reserved list
+        if (/^[A-Z]{3,}$/.test(token) && !reservedSet.has(token)) {
+            errors.push(`Unrecognized keyword: ${token}`);
+        }
+    });
+    return errors;
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Use your main SQL textarea as the input for syntax checking
+    const mainTextarea = document.getElementById('sql_query_textarea');
+    const cellOutput = document.getElementById('cell_output');
+    const feedback = document.getElementById('sql_query_feedback');
+    // Patch scripts.js to use your main textarea
+    window.textarea = mainTextarea;
+    window.cell_output = cellOutput;
+    // Optionally hide the dummy cell_input/cell_output if not needed
+    document.getElementById('cell_input').style.display = 'none';
+
+    // Dynamic validation: run syntax highlighting and validation on input
+    mainTextarea.addEventListener('input', function() {
+        if (typeof update === 'function') {
+            update(reserved_words);
+        }
+        const errors = checkForMisspelledKeywords(mainTextarea.value, reserved_words);
+        if (errors.length > 0) {
+            feedback.innerHTML = errors.join('<br>');
+            feedback.style.color = '#ef4444';
+        } else if (mainTextarea.value.trim()) {
+            feedback.innerHTML = 'Valid SQL syntax.';
+            feedback.style.color = '#22c55e';
+        } else {
+            feedback.innerHTML = '';
+            feedback.style.color = '';
+        }
+    });
+
+    // Initial run (in case of pre-filled SQL)
+    if (typeof update === 'function') {
+        update(reserved_words);
+    }
+    feedback.innerHTML = '';
+    feedback.style.color = '';
+});
+
+
+
+function loadSampleData() {
+    // Example: PostgreSQL best-practice sample
+    // 1. SQL Query
+    document.getElementById('sql_query_textarea').value =
+`SELECT u.id, u.name, COUNT(o.id) AS order_count
+FROM users u
+LEFT JOIN orders o ON u.id = o.user_id
+WHERE u.status = 'active'
+GROUP BY u.id, u.name
+HAVING COUNT(o.id) > 0
+ORDER BY order_count DESC
+LIMIT 10;`;
+    // 2. Set DB engine
+    document.getElementById('db_engine_select').value = 'postgresql';
+    // 3. EXPLAIN plan
+    document.getElementById('explain_plan_textarea').value =
+`Seq Scan on users  (cost=0.00..431.00 rows=21000 width=4)
+  Filter: (status = 'active')
+Hash Left Join  (cost=0.00..431.00 rows=21000 width=8)
+  Hash Cond: (o.user_id = u.id)`;
+    // 4. Clear and add sample tables
+    const tablesContainer = document.getElementById('tables-container');
+    tablesContainer.innerHTML = '';
+    addTable('users', 'CREATE TABLE users (id INT PRIMARY KEY, name TEXT, status TEXT);', '120000', '500MB', true, 'id', false, '', '');
+    addTable('orders', 'CREATE TABLE orders (id INT PRIMARY KEY, user_id INT, amount NUMERIC, created_at TIMESTAMP);', '500000', '2GB', true, 'id', true, 'user_id', 'users');
+    // 5. Clear and add sample indexes
+    const indexesContainer = document.getElementById('indexes-container');
+    indexesContainer.innerHTML = '';
+    addIndex('idx_status', 'users', 'CREATE INDEX idx_status ON users(status);', '50MB');
+    addIndex('idx_orders_user', 'orders', 'CREATE INDEX idx_orders_user ON orders(user_id);', '200MB');
+    // 6. Trigger validation and tooltips
+    if (window.bootstrap && bootstrap.Tooltip) {
+        var newInputs = document.querySelectorAll('[title]');
+        newInputs.forEach(function (el) {
+            new bootstrap.Tooltip(el);
+        });
+    }
+    // 7. Trigger validation for SQL and EXPLAIN
+    if (typeof update === 'function') update(reserved_words);
+    if (typeof validateExplain === 'function') validateExplain();
+    // 8. Announce to screen readers
+    const feedback = document.getElementById('sql_query_feedback');
+    if (feedback) {
+        feedback.innerHTML = 'Sample data loaded.';
+        feedback.style.color = '#22c55e';
+        feedback.setAttribute('aria-live', 'polite');
+    }
+}
+
+
+</script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  var tooltipTriggerList = [].slice.call(document.querySelectorAll('[title]'));
+  tooltipTriggerList.forEach(function (el) {
+    new bootstrap.Tooltip(el);
+  });
+  
+  // Dark mode functionality
+  initializeDarkMode();
+  
+  // Check if coming from comparison page
+  const urlParams = new URLSearchParams(window.location.search);
+  const fromCompare = urlParams.get('from_compare');
+  const selectedQuery = urlParams.get('query');
+
+  if (fromCompare && sessionStorage.getItem('compare_queries')) {
+    try {
+      const queries = JSON.parse(sessionStorage.getItem('compare_queries'));
+      
+      if (queries && queries.length > 0) {
+        // Show comparison queries dropdown
+        showComparisonQueriesDropdown(queries, selectedQuery);
+        
+        // Show success message
+        showComparisonSuccessMessage();
+      }
+    } catch (e) {
+      console.error('Error parsing comparison queries:', e);
+    }
+  }
+});
+
+function initializeDarkMode() {
+    const darkModeToggle = document.getElementById('dark-mode-toggle');
+    const darkModeIcon = document.getElementById('dark-mode-icon');
+    
+    // Check for saved theme preference or default to light mode
+    const currentTheme = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', currentTheme);
+    updateDarkModeIcon(currentTheme);
+    
+    // Add click event listener
+    darkModeToggle.addEventListener('click', function() {
+        const currentTheme = document.documentElement.getAttribute('data-theme');
+        const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+        
+        // Update theme
+        document.documentElement.setAttribute('data-theme', newTheme);
+        localStorage.setItem('theme', newTheme);
+        updateDarkModeIcon(newTheme);
+        
+        // Announce theme change for accessibility
+        const announcement = document.createElement('div');
+        announcement.setAttribute('aria-live', 'polite');
+        announcement.setAttribute('aria-label', `Switched to ${newTheme} mode`);
+        announcement.style.position = 'absolute';
+        announcement.style.left = '-10000px';
+        announcement.style.width = '1px';
+        announcement.style.height = '1px';
+        announcement.style.overflow = 'hidden';
+        document.body.appendChild(announcement);
+        setTimeout(() => document.body.removeChild(announcement), 1000);
+    });
+}
+
+function updateDarkModeIcon(theme) {
+    const darkModeIcon = document.getElementById('dark-mode-icon');
+    const darkModeToggle = document.getElementById('dark-mode-toggle');
+    
+    if (theme === 'dark') {
+        darkModeIcon.className = 'fas fa-sun';
+        darkModeToggle.title = 'Switch to Light Mode';
+        darkModeToggle.classList.remove('btn-outline-secondary');
+        darkModeToggle.classList.add('btn-outline-warning');
+    } else {
+        darkModeIcon.className = 'fas fa-moon';
+        darkModeToggle.title = 'Switch to Dark Mode';
+        darkModeToggle.classList.remove('btn-outline-warning');
+        darkModeToggle.classList.add('btn-outline-secondary');
+    }
+}
+
+// Comparison functionality
+function showComparisonQueriesDropdown(queries, selectedQueryIndex) {
+    // Create dropdown container
+    const dropdownContainer = document.createElement('div');
+    dropdownContainer.className = 'alert alert-info mb-3';
+    dropdownContainer.innerHTML = `
+        <div class="d-flex justify-content-between align-items-center">
+            <div>
+                <i class="fas fa-info-circle me-2"></i>
+                <strong>Queries from Comparison</strong>
+                <span class="badge bg-primary ms-2">${queries.length} query${queries.length > 1 ? 'ies' : 'y'}</span>
+            </div>
+            <button type="button" class="btn-close" onclick="this.parentElement.parentElement.remove()"></button>
+        </div>
+        <div class="mt-2">
+            <label class="form-label fw-bold">Select a query to analyze:</label>
+            <select class="form-select" id="compareQuerySelect" onchange="loadSelectedQuery()">
+                <option value="">Choose a query...</option>
+                ${queries.map(q => `
+                    <option value="${q.index}" ${selectedQueryIndex == q.index ? 'selected' : ''}>
+                        Query ${q.index} (${q.db_engine.toUpperCase()})
+                    </option>
+                `).join('')}
+            </select>
+        </div>
+    `;
+
+    // Insert before the form
+    const form = document.querySelector('form');
+    form.parentNode.insertBefore(dropdownContainer, form);
+
+    // Auto-load selected query if specified
+    if (selectedQueryIndex) {
+        loadSelectedQuery();
+    }
+}
+
+function loadSelectedQuery() {
+    const select = document.getElementById('compareQuerySelect');
+    const selectedIndex = select.value;
+    
+    console.log('loadSelectedQuery called with index:', selectedIndex);
+    
+    if (selectedIndex && sessionStorage.getItem('compare_queries')) {
+        try {
+            const queries = JSON.parse(sessionStorage.getItem('compare_queries'));
+            const selectedQuery = queries.find(q => q.index == selectedIndex);
+            
+            console.log('Found selected query:', selectedQuery);
+            
+            if (selectedQuery) {
+                // Populate SQL field
+                const sqlTextarea = document.getElementById('sql_query_textarea');
+                console.log('SQL textarea found:', sqlTextarea);
+                if (sqlTextarea) {
+                    sqlTextarea.value = selectedQuery.query;
+                    console.log('SQL field populated with:', selectedQuery.query);
+                }
+                
+                // Set database engine
+                const dbEngineSelect = document.getElementById('db_engine_select');
+                console.log('DB engine select found:', dbEngineSelect);
+                if (dbEngineSelect) {
+                    dbEngineSelect.value = selectedQuery.db_engine;
+                    console.log('DB engine set to:', selectedQuery.db_engine);
+                }
+                
+                // Show success message
+                showQueryLoadedMessage(selectedQuery);
+            }
+        } catch (e) {
+            console.error('Error loading selected query:', e);
+        }
+    }
+}
+
+function showComparisonSuccessMessage() {
+    const successDiv = document.createElement('div');
+    successDiv.className = 'alert alert-success alert-dismissible fade show mb-3';
+    successDiv.innerHTML = `
+        <i class="fas fa-check-circle me-2"></i>
+        <strong>Success!</strong> Queries from comparison have been loaded. Select a query from the dropdown above to start detailed analysis.
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    `;
+    
+    const form = document.querySelector('form');
+    form.parentNode.insertBefore(successDiv, form);
+}
+
+function showQueryLoadedMessage(query) {
+    // Remove existing messages
+    const existingMessages = document.querySelectorAll('.alert-success');
+    existingMessages.forEach(msg => msg.remove());
+    
+    const successDiv = document.createElement('div');
+    successDiv.className = 'alert alert-success alert-dismissible fade show mb-3';
+    successDiv.innerHTML = `
+        <i class="fas fa-check-circle me-2"></i>
+        <strong>Query ${query.index} loaded!</strong> Database engine set to ${query.db_engine.toUpperCase()}. 
+        Add table DDL and index information for better analysis results.
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    `;
+    
+    const form = document.querySelector('form');
+    form.parentNode.insertBefore(successDiv, form);
+}
+
+// Template Library functionality
+document.addEventListener('DOMContentLoaded', function() {
+    const templateLibraryBtn = document.getElementById('template-library-btn');
+    if (templateLibraryBtn) {
+        templateLibraryBtn.addEventListener('click', function() {
+            loadTemplateLibrary();
+            const modal = new bootstrap.Modal(document.getElementById('templateLibraryModal'));
+            modal.show();
+        });
+    }
+});
+
+function loadTemplateLibrary() {
+    // Load templates from external file
+    const script = document.createElement('script');
+    script.src = '/static/templates.js';
+    script.onload = function() {
+        populateTemplateLibrary();
+    };
+    document.head.appendChild(script);
+}
+
+function populateTemplateLibrary() {
+    const categoryFilter = document.getElementById('categoryFilter');
+    const difficultyFilter = document.getElementById('difficultyFilter');
+    const templatesGrid = document.getElementById('templatesGrid');
+    
+    // Populate category filter
+    categoryFilter.innerHTML = '<option value="">All Categories</option>';
+    templateCategories.forEach(category => {
+        categoryFilter.innerHTML += `<option value="${category.id}">${category.name}</option>`;
+    });
+    
+    // Populate difficulty filter
+    difficultyFilter.innerHTML = '<option value="">All Difficulties</option>';
+    difficultyLevels.forEach(level => {
+        difficultyFilter.innerHTML += `<option value="${level.id}">${level.name}</option>`;
+    });
+    
+    // Display all templates
+    displayTemplates();
+    
+    // Add filter event listeners
+    categoryFilter.addEventListener('change', displayTemplates);
+    difficultyFilter.addEventListener('change', displayTemplates);
+}
+
+function displayTemplates() {
+    const categoryFilter = document.getElementById('categoryFilter').value;
+    const difficultyFilter = document.getElementById('difficultyFilter').value;
+    const templatesGrid = document.getElementById('templatesGrid');
+    
+    templatesGrid.innerHTML = '';
+    
+    Object.keys(queryTemplates).forEach(key => {
+        const template = queryTemplates[key];
+        
+        // Apply filters
+        if (categoryFilter && template.category.toLowerCase() !== categoryFilter) return;
+        if (difficultyFilter && template.difficulty.toLowerCase() !== difficultyFilter) return;
+        
+        const difficultyColor = difficultyLevels.find(l => l.name === template.difficulty)?.color || 'secondary';
+        
+        const templateCard = `
+            <div class="col-md-6 col-lg-4">
+                <div class="card h-100 template-card" data-template-key="${key}">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start mb-2">
+                            <h6 class="card-title mb-0">${template.name}</h6>
+                            <span class="badge bg-${difficultyColor}">${template.difficulty}</span>
+                        </div>
+                        <p class="card-text small text-muted">${template.description}</p>
+                        <div class="template-meta">
+                            <small class="text-muted">
+                                <i class="fas fa-table me-1"></i>${template.tables.length} table${template.tables.length !== 1 ? 's' : ''}
+                                <i class="fas fa-key ms-2 me-1"></i>${template.indexes.length} index${template.indexes.length !== 1 ? 'es' : ''}
+                            </small>
+                        </div>
+                    </div>
+                    <div class="card-footer bg-transparent">
+                        <button class="btn btn-outline-primary btn-sm w-100" onclick="showTemplateDetail('${key}')">
+                            <i class="fas fa-eye me-1"></i>View Details
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        templatesGrid.innerHTML += templateCard;
+    });
+}
+
+function showTemplateDetail(templateKey) {
+    const template = queryTemplates[templateKey];
+    const detailContent = document.getElementById('templateDetailContent');
+    const detailModal = new bootstrap.Modal(document.getElementById('templateDetailModal'));
+    
+    const difficultyColor = difficultyLevels.find(l => l.name === template.difficulty)?.color || 'secondary';
+    
+    detailContent.innerHTML = `
+        <div class="row">
+            <div class="col-12">
+                <div class="d-flex justify-content-between align-items-start mb-3">
+                    <h4>${template.name}</h4>
+                    <span class="badge bg-${difficultyColor} fs-6">${template.difficulty}</span>
+                </div>
+                <p class="text-muted">${template.description}</p>
+            </div>
+        </div>
+        
+        <div class="row">
+            <div class="col-12">
+                <h5><i class="fas fa-code me-2"></i>SQL Query</h5>
+                <pre class="bg-light p-3 rounded"><code>${template.sql}</code></pre>
+            </div>
+        </div>
+        
+        <div class="row">
+            <div class="col-md-6">
+                <h5><i class="fas fa-table me-2"></i>Tables (${template.tables.length})</h5>
+                ${template.tables.map(table => `
+                    <div class="card mb-2">
+                        <div class="card-body p-2">
+                            <h6 class="card-title mb-1">${table.name}</h6>
+                            <small class="text-muted">
+                                ${table.rows} rows • ${table.size}<br>
+                                ${table.has_primary_key ? `PK: ${table.primary_key_column}` : 'No PK'}${table.has_foreign_key ? ` • FK: ${table.foreign_key_column} → ${table.foreign_key_table}` : ''}
+                            </small>
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+            <div class="col-md-6">
+                <h5><i class="fas fa-key me-2"></i>Indexes (${template.indexes.length})</h5>
+                ${template.indexes.map(index => `
+                    <div class="card mb-2">
+                        <div class="card-body p-2">
+                            <h6 class="card-title mb-1">${index.name}</h6>
+                            <small class="text-muted">${index.size}</small>
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+        
+        <div class="row mt-3">
+            <div class="col-12">
+                <h5><i class="fas fa-lightbulb me-2"></i>Performance Tips</h5>
+                <ul class="list-unstyled">
+                    ${template.tips.map(tip => `<li><i class="fas fa-check text-success me-2"></i>${tip}</li>`).join('')}
+                </ul>
+            </div>
+        </div>
+    `;
+    
+    // Store template key for use button
+    document.getElementById('useTemplateBtn').setAttribute('data-template-key', templateKey);
+    
+    detailModal.show();
+}
+
+// Use template functionality
+document.addEventListener('click', function(e) {
+    if (e.target.id === 'useTemplateBtn') {
+        const templateKey = e.target.getAttribute('data-template-key');
+        useTemplate(templateKey);
+    }
+});
+
+function useTemplate(templateKey) {
+    const template = queryTemplates[templateKey];
+    
+    // Fill SQL query
+    document.getElementById('sql_query_textarea').value = template.sql;
+    
+    // Clear existing tables and add template tables
+    const tablesContainer = document.getElementById('tables-container');
+    tablesContainer.innerHTML = '';
+    template.tables.forEach(table => {
+        addTable(
+            table.name,
+            table.ddl,
+            table.rows,
+            table.size,
+            table.has_primary_key,
+            table.primary_key_column,
+            table.has_foreign_key,
+            table.foreign_key_column,
+            table.foreign_key_table
+        );
+    });
+    
+    // Clear existing indexes and add template indexes
+    const indexesContainer = document.getElementById('indexes-container');
+    indexesContainer.innerHTML = '';
+    template.indexes.forEach(index => {
+        addIndex(index.name, index.table, index.definition, index.size);
+    });
+    
+    // Close modals
+    bootstrap.Modal.getInstance(document.getElementById('templateDetailModal')).hide();
+    bootstrap.Modal.getInstance(document.getElementById('templateLibraryModal')).hide();
+    
+    // Trigger validation
+    if (typeof update === 'function') update(reserved_words);
+    
+    // Announce to screen readers
+    const feedback = document.getElementById('sql_query_feedback');
+    if (feedback) {
+        feedback.innerHTML = `Template "${template.name}" loaded successfully.`;
+        feedback.style.color = '#22c55e';
+        feedback.setAttribute('aria-live', 'polite');
+    }
+}
+</script>
+
+<!-- Template Library Modal -->
+<div class="modal fade" id="templateLibraryModal" tabindex="-1" aria-labelledby="templateLibraryModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="templateLibraryModalLabel">
+                    <i class="fas fa-book me-2"></i>Query Templates Library
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <!-- Category Filter -->
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label for="categoryFilter" class="form-label">Filter by Category:</label>
+                        <select class="form-select" id="categoryFilter">
+                            <option value="">All Categories</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label for="difficultyFilter" class="form-label">Filter by Difficulty:</label>
+                        <select class="form-select" id="difficultyFilter">
+                            <option value="">All Difficulties</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Templates Grid -->
+                <div id="templatesGrid" class="row g-3">
+                    <!-- Templates will be populated here -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Template Detail Modal -->
+<div class="modal fade" id="templateDetailModal" tabindex="-1" aria-labelledby="templateDetailModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="templateDetailModalLabel">
+                    <i class="fas fa-code me-2"></i>Template Details
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="templateDetailContent">
+                    <!-- Template details will be populated here -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary" id="useTemplateBtn">
+                    <i class="fas fa-play me-1"></i>Use This Template
+                </button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html> 

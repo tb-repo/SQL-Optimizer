@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SQL Analysis Report PDF</title>
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #fff; color: #212529; margin: 0; padding: 2em; }
+        .header { color: #2563eb; font-size: 2em; margin-bottom: 0.5em; }
+        .section { margin-bottom: 1.5em; border: 1px solid #e5e7eb; border-radius: 0.5em; padding: 1em; }
+        .section-title { background: #2563eb; color: #fff; padding: 0.5em 1em; border-radius: 0.5em 0.5em 0 0; font-size: 1.1em; font-weight: 500; margin: -1em -1em 1em -1em; }
+        pre { background: #f8f9fa; padding: 0.5em; border-radius: 0.3em; }
+        ul { margin: 0.5em 0 0.5em 1.5em; }
+    </style>
+</head>
+<body>
+    <div class="header">SQL Analysis Report</div>
+    <div><strong>Database Engine:</strong> {{ db_engine|capitalize }}</div>
+    {% if report %}
+        <div class="section">
+            <div class="section-title">Summary</div>
+            <div>{{ report.summary }}</div>
+        </div>
+        {% if report.recommendations %}
+        <div class="section">
+            <div class="section-title">Recommendations</div>
+            <ul>
+            {% for rec in report.recommendations %}
+                <li>{{ rec }}</li>
+            {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+        {% if report.warnings %}
+        <div class="section">
+            <div class="section-title">Warnings</div>
+            <ul>
+            {% for warn in report.warnings %}
+                <li>{{ warn }}</li>
+            {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+        {% if report.optimized_query %}
+        <div class="section">
+            <div class="section-title">Optimized Query Suggestion</div>
+            <pre>{{ report.optimized_query }}</pre>
+        </div>
+        {% endif %}
+    {% else %}
+        <div class="section">No analysis report available.</div>
+    {% endif %}
+</body>
+</html> 
