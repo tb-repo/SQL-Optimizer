@@ -1,0 +1,323 @@
+body {
+	background-color: lightblue;
+}
+
+section {
+	margin-top: 5%;
+	margin-left: 10%;
+	width: 80%;
+	display: inline-flex;
+	flex-flow: row;
+	column-gap: 1%;
+}
+
+
+label {
+	margin-left: 20px;
+	font-weight: bold;
+}
+
+textarea{
+	padding: 5px;
+	padding-left: 5px;
+}
+
+.cell{
+	background-color: white;
+
+}
+
+#cell_output{
+	padding: 5px;
+	padding-left: 5px;
+}
+
+/*
+.whitespace{
+	border-bottom: 2px lightgray solid;
+	margin: 1px;
+}
+*/
+
+.tabspace{
+	border: 1px solid lightgray;
+	margin: 1px;
+}
+
+.linebreak{
+	/*might make line break color optional*/
+	/*border-left: 2px solid grey;*/
+	margin-left:  5px;
+}
+
+.numbers{
+	color: green;
+	font-weight: bold;
+}
+
+
+.letters{
+	color: black;
+}
+
+.brackets{
+	color:  gold;
+	 font-weight: bold;
+}
+
+.singlequotes{
+	color:  purple;
+}
+
+.danger{
+	color: red;
+}
+
+.matched{
+	color:  blue;
+}
+
+/* Did you know? Highlight Section - Soft theme */
+.did-you-know-highlight {
+    background: linear-gradient(135deg, #a78bfa 0%, #8b5cf6 100%);
+    border-radius: 12px;
+    padding: 0;
+    box-shadow: 0 4px 20px rgba(167, 139, 250, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    overflow: hidden;
+    position: relative;
+}
+
+.did-you-know-highlight::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #ff6b6b, #4ecdc4, #45b7d1, #96ceb4);
+    animation: rainbow 3s ease-in-out infinite;
+}
+
+@keyframes rainbow {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+}
+
+.did-you-know-header {
+    background: rgba(255, 255, 255, 0.1);
+    padding: 16px 24px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.did-you-know-title {
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: white;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.did-you-know-subtitle {
+    font-size: 0.95rem;
+    color: rgba(255, 255, 255, 0.9);
+    font-weight: 500;
+}
+
+.did-you-know-content {
+    padding: 20px 24px;
+    position: relative;
+}
+
+.did-you-know-text {
+    font-size: 1.1rem;
+    line-height: 1.6;
+    color: white;
+    font-weight: 500;
+    margin-bottom: 16px;
+    min-height: 2.5em;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.did-you-know-progress {
+    height: 4px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.did-you-know-progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, #ff6b6b, #4ecdc4);
+    border-radius: 2px;
+    width: 0%;
+    animation: progress-fill 15s linear infinite;
+}
+
+@keyframes progress-fill {
+    0% { width: 0%; }
+    100% { width: 100%; }
+}
+
+/* Section Highlight Styles - Different color patterns for each section */
+.section-highlight {
+    border-radius: 12px;
+    padding: 0;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    overflow: hidden;
+    position: relative;
+    margin-bottom: 1.5rem;
+}
+
+.section-highlight::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    border-radius: 12px 12px 0 0;
+}
+
+.section-highlight-header {
+    padding: 16px 24px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.section-highlight-title {
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: #1f2937;
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.5);
+}
+
+.section-highlight-subtitle {
+    font-size: 0.9rem;
+    color: #4b5563;
+    font-weight: 500;
+}
+
+.section-highlight-content {
+    padding: 20px 24px;
+    position: relative;
+}
+
+/* SQL Query Section - Soft Blue theme */
+.sql-query-highlight {
+    background: linear-gradient(135deg, #93c5fd 0%, #3b82f6 100%);
+}
+
+.sql-query-highlight::before {
+    background: linear-gradient(90deg, #bfdbfe, #93c5fd, #3b82f6, #2563eb);
+    animation: blue-rainbow 4s ease-in-out infinite;
+}
+
+@keyframes blue-rainbow {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+}
+
+/* Tables Section - Soft Green theme */
+.tables-highlight {
+    background: linear-gradient(135deg, #86efac 0%, #22c55e 100%);
+}
+
+.tables-highlight::before {
+    background: linear-gradient(90deg, #bbf7d0, #86efac, #22c55e, #16a34a);
+    animation: green-rainbow 4s ease-in-out infinite;
+}
+
+@keyframes green-rainbow {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+}
+
+/* Indexes Section - Soft Orange theme */
+.indexes-highlight {
+    background: linear-gradient(135deg, #fed7aa 0%, #f97316 100%);
+}
+
+.indexes-highlight::before {
+    background: linear-gradient(90deg, #fed7aa, #fdba74, #f97316, #ea580c);
+    animation: orange-rainbow 4s ease-in-out infinite;
+}
+
+@keyframes orange-rainbow {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+}
+
+/* EXPLAIN Plan Section - Soft Purple theme */
+.explain-highlight {
+    background: linear-gradient(135deg, #c4b5fd 0%, #8b5cf6 100%);
+}
+
+.explain-highlight::before {
+    background: linear-gradient(90deg, #ddd6fe, #c4b5fd, #8b5cf6, #7c3aed);
+    animation: purple-rainbow 4s ease-in-out infinite;
+}
+
+@keyframes purple-rainbow {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+}
+
+/* Database Engine Section - Soft Teal theme */
+.engine-highlight {
+    background: linear-gradient(135deg, #99f6e4 0%, #14b8a6 100%);
+}
+
+.engine-highlight::before {
+    background: linear-gradient(90deg, #ccfbf1, #99f6e4, #14b8a6, #0d9488);
+    animation: teal-rainbow 4s ease-in-out infinite;
+}
+
+@keyframes teal-rainbow {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+}
+
+/* Responsive adjustments for section highlights */
+@media (max-width: 768px) {
+    .did-you-know-header {
+        padding: 12px 16px;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+    }
+    
+    .did-you-know-title {
+        font-size: 1.2rem;
+    }
+    
+    .did-you-know-content {
+        padding: 16px;
+    }
+    
+    .did-you-know-text {
+        font-size: 1rem;
+    }
+
+    .section-highlight-header {
+        padding: 12px 16px;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+    }
+    
+    .section-highlight-title {
+        font-size: 1.1rem;
+    }
+    
+    .section-highlight-content {
+        padding: 16px;
+    }
+}

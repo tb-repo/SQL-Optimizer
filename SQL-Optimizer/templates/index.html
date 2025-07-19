@@ -1,0 +1,52 @@
+<!-- Move DB engine selector to the top -->
+<form method="POST" enctype="multipart/form-data" id="sql-form">
+  <div class="form-group">
+    {{ form.db_engine.label }}
+    {{ form.db_engine(class="form-control") }}
+  </div>
+  <!-- CSV Upload Section -->
+  <div class="form-row mb-3">
+    <div class="col">
+      <label for="csv-table-upload">Import Table CSV</label>
+      <input type="file" class="form-control-file" id="csv-table-upload" accept=".csv">
+    </div>
+    <div class="col">
+      <label for="csv-index-upload">Import Index CSV</label>
+      <input type="file" class="form-control-file" id="csv-index-upload" accept=".csv">
+    </div>
+    <div class="col">
+      <label for="csv-explain-upload">Import Explain Plan CSV</label>
+      <input type="file" class="form-control-file" id="csv-explain-upload" accept=".csv">
+    </div>
+  </div>
+  <div class="form-group">
+    <button type="button" class="btn btn-info" data-toggle="modal" data-target="#csvHelpModal">
+      How to generate CSVs?
+    </button>
+  </div>
+  <!-- ... existing form fields ... -->
+</form>
+
+<!-- CSV Help Modal Placeholder -->
+<div class="modal fade" id="csvHelpModal" tabindex="-1" role="dialog" aria-labelledby="csvHelpModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="csvHelpModalLabel">How to Generate CSVs for Table, Index, and Explain Plan</h5>
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div class="modal-body">
+        <!-- Collapsible sections for each data type will be dynamically filled by JS -->
+        <div id="csv-help-content"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- End CSV Help Modal Placeholder -->
+
+<!-- ... existing code ... --> 
