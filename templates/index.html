@@ -158,11 +158,25 @@
         }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/sql-formatter@12.2.3/dist/sql-formatter.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@8.14.0/dist/mermaid.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
     <script src="{{ url_for('static', filename='wordlist.js') }}"></script>
     <script src="{{ url_for('static', filename='tips.js') }}"></script>
-    <script src="{{ url_for('static', filename='scripts.js') }}?v=2"></script>
+    <script src="{{ url_for('static', filename='scripts.js') }}?v=17"></script>
+    <script>
+        // Initialize Mermaid for visualization
+        if (typeof mermaid !== 'undefined') {
+                    mermaid.initialize({
+            startOnLoad: true,
+            theme: 'default',
+            flowchart: {
+                useMaxWidth: false,
+                htmlLabels: true
+            }
+        });
+        }
+    </script>
 </head>
 <body>
 <div class="container mt-5">
@@ -350,35 +364,98 @@
                 <div class="form-text text-white" id="explain_plan_help">{{ form.explain_plan.description }}</div>
             </div>
         </div>
-        <!-- Database Engine Section - Teal theme -->
-        <div class="section-highlight engine-highlight">
+        
+        <!-- EXPLAIN Plan Visualization Section - Indigo theme -->
+        <div class="section-highlight visualization-highlight mb-4">
             <div class="section-highlight-header">
-                <i class="fas fa-database me-2"></i>
-                <span class="section-highlight-title">5. Database Engine</span>
-                <span class="section-highlight-subtitle"><span class="required-label">*</span> Required</span>
+                <i class="fas fa-project-diagram me-2"></i>
+                <span class="section-highlight-title">EXPLAIN Plan Visualization</span>
+                <span class="section-highlight-subtitle"><span class="optional-label">(optional)</span> Visual execution plan</span>
             </div>
             <div class="section-highlight-content">
                 <div class="row">
-                    <div class="col-md-6">
-                        <label class="form-label text-white">{{ form.db_engine.label.text }} <span class="required-label">*</span></label>
-                        <select name="db_engine" class="form-select" id="db_engine_select" required>
-                          {% for value, label in form.db_engine.choices %}
-                            <option value="{{ value }}"
-                              {% if (form.db_engine.data == value) or (not form.db_engine.data and value == 'postgresql') or (form.db_engine.data == 'other' and value == 'postgresql') %}
-                                selected
-                              {% endif %}
-                            >{{ label }}</option>
-                          {% endfor %}
-                        </select>
-                    </div>
-                    <div class="col-md-6 text-end d-flex align-items-end justify-content-end">
-                        <button type="submit" class="btn btn-light btn-lg" id="sticky-analyze-btn" aria-label="Analyze SQL">
-                            <i class="fas fa-rocket me-2"></i>Analyze SQL
+                    <div class="col-md-12 text-center">
+                        <button type="button" class="btn btn-light btn-lg" onclick="generateExplainVisualization()">
+                            <i class="fas fa-eye me-2"></i>Generate Visualization
                         </button>
                     </div>
                 </div>
+                
+                <!-- Visualization Output -->
+                <div id="explain_visualization_container" class="mt-3" style="display: none;">
+                    <div class="card">
+                        <div class="card-header bg-light text-dark">
+                            <h6 class="mb-0"><i class="fas fa-chart-line me-2"></i>Execution Plan Visualization</h6>
+                        </div>
+                        <div class="card-body">
+                            <div id="explain_visualization_output" class="text-center">
+                                <!-- Mermaid diagram will be rendered here -->
+                            </div>
+                            <div class="mt-3">
+                                <button type="button" class="btn btn-outline-primary btn-sm" onclick="downloadVisualization()">
+                                    <i class="fas fa-download me-1"></i>Download as PNG
+                                </button>
+                                <button type="button" class="btn btn-outline-secondary btn-sm ms-2" onclick="copyVisualizationCode()">
+                                    <i class="fas fa-copy me-1"></i>Copy Mermaid Code
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="form-text text-white mt-2">
+                    <i class="fas fa-info-circle me-1"></i>
+                    Upload an EXPLAIN plan CSV or paste EXPLAIN output text above, then click "Generate Visualization" to see a beautiful flowchart of your query's execution plan.
+                </div>
+                
+                <style>
+                    /* Mermaid diagram styling for visualization */
+                    .mermaid {
+                        text-align: center;
+                        margin: 1rem 0;
+                    }
+                    
+                    /* Node styling for different operation types */
+                    .seq-scan {
+                        fill: #fecaca !important;
+                        stroke: #dc2626 !important;
+                    }
+                    
+                    .index-scan {
+                        fill: #dbeafe !important;
+                        stroke: #2563eb !important;
+                    }
+                    
+                    .join {
+                        fill: #fef3c7 !important;
+                        stroke: #d97706 !important;
+                    }
+                    
+                    .aggregate {
+                        fill: #d1fae5 !important;
+                        stroke: #059669 !important;
+                    }
+                    
+                    .filter {
+                        fill: #f3e8ff !important;
+                        stroke: #7c3aed !important;
+                    }
+                    
+                    .result {
+                        fill: #fef2f2 !important;
+                        stroke: #dc2626 !important;
+                    }
+                    
+                    .default {
+                        fill: #f3f4f6 !important;
+                        stroke: #6b7280 !important;
+                    }
+                </style>
             </div>
         </div>
+        <!-- Database Engine Section - Teal theme -->
+        <!-- This section is removed as per user request. -->
+        <!-- End of duplicate DB engine selector removal -->
 
     </form>
   </div>
@@ -557,6 +634,10 @@ function validateExplain() {
     const feedback = document.getElementById('explain_plan_feedback');
     const engine = document.getElementById('db_engine_select').value;
     const val = textarea.value.trim();
+    
+    // Clear visualization container when user starts typing
+    clearVisualizationOnInput();
+    
     if (!val) { feedback.textContent = ''; feedback.style.color = ''; return; }
     let valid = false, msg = '';
     if (engine === 'postgresql') {
@@ -580,6 +661,17 @@ function validateExplain() {
     }
     feedback.textContent = msg;
     feedback.style.color = valid ? '#22c55e' : '#ef4444';
+}
+
+function clearVisualizationOnInput() {
+    const container = document.getElementById('explain_visualization_container');
+    const output = document.getElementById('explain_visualization_output');
+    
+    if (container && output) {
+        // Hide the container and clear any error messages
+        container.style.display = 'none';
+        output.innerHTML = '';
+    }
 }
 document.getElementById('explain_plan_textarea').addEventListener('input', validateExplain);
 document.getElementById('db_engine_select').addEventListener('change', validateExplain);
@@ -657,46 +749,100 @@ document.addEventListener('DOMContentLoaded', function() {
 
 
 function loadSampleData() {
-    // Example: PostgreSQL best-practice sample
-    // 1. SQL Query
-    document.getElementById('sql_query_textarea').value =
-`SELECT u.id, u.name, COUNT(o.id) AS order_count
-FROM users u
-LEFT JOIN orders o ON u.id = o.user_id
-WHERE u.status = 'active'
-GROUP BY u.id, u.name
-HAVING COUNT(o.id) > 0
-ORDER BY order_count DESC
-LIMIT 10;`;
-    // 2. Set DB engine
-    document.getElementById('db_engine_select').value = 'postgresql';
-    // 3. EXPLAIN plan
-    document.getElementById('explain_plan_textarea').value =
-`Seq Scan on users  (cost=0.00..431.00 rows=21000 width=4)
-  Filter: (status = 'active')
-Hash Left Join  (cost=0.00..431.00 rows=21000 width=8)
-  Hash Cond: (o.user_id = u.id)`;
-    // 4. Clear and add sample tables
+    // 1. Detect selected DB engine
+    const dbEngine = document.getElementById('db_engine_select').value;
+
+    // 2. Define engine-specific samples
+    const samples = {
+        postgresql: {
+            sql: `SELECT u.id, u.name, COUNT(o.id) AS order_count\nFROM users u\nLEFT JOIN orders o ON u.id = o.user_id\nWHERE u.status = 'active'\nGROUP BY u.id, u.name\nHAVING COUNT(o.id) > 0\nORDER BY order_count DESC\nLIMIT 10;`,
+            explain: `Seq Scan on users  (cost=0.00..431.00 rows=21000 width=4)\n  Filter: (status = 'active')\nHash Left Join  (cost=0.00..431.00 rows=21000 width=8)\n  Hash Cond: (o.user_id = u.id)` ,
+            tables: [
+                ['users', 'CREATE TABLE users (id INT PRIMARY KEY, name TEXT, status TEXT);', '120000', '500MB', true, 'id', false, '', ''],
+                ['orders', 'CREATE TABLE orders (id INT PRIMARY KEY, user_id INT, amount NUMERIC, created_at TIMESTAMP);', '500000', '2GB', true, 'id', true, 'user_id', 'users']
+            ],
+            indexes: [
+                ['idx_status', 'users', 'CREATE INDEX idx_status ON users(status);', '50MB'],
+                ['idx_orders_user', 'orders', 'CREATE INDEX idx_orders_user ON orders(user_id);', '200MB']
+            ]
+        },
+        mysql: {
+            sql: `SELECT u.id, u.name, COUNT(o.id) AS order_count\nFROM users u\nLEFT JOIN orders o ON u.id = o.user_id\nWHERE u.status = 'active'\nGROUP BY u.id, u.name\nHAVING COUNT(o.id) > 0\nORDER BY order_count DESC\nLIMIT 10;`,
+            explain: `id | select_type | table | type | possible_keys | key | key_len | ref | rows | Extra\n1 | SIMPLE | users | ALL | NULL | NULL | NULL | NULL | 120000 | Using where\n1 | SIMPLE | orders | ref | user_id | user_id | 4 | users.id | 5 |`,
+            tables: [
+                ['users', 'CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(100), status VARCHAR(20));', '120000', '500MB', true, 'id', false, '', ''],
+                ['orders', 'CREATE TABLE orders (id INT PRIMARY KEY, user_id INT, amount DECIMAL(10,2), created_at DATETIME);', '500000', '2GB', true, 'id', true, 'user_id', 'users']
+            ],
+            indexes: [
+                ['idx_status', 'users', 'CREATE INDEX idx_status ON users(status);', '50MB'],
+                ['idx_orders_user', 'orders', 'CREATE INDEX idx_orders_user ON orders(user_id);', '200MB']
+            ]
+        },
+        sqlserver: {
+            sql: `SELECT u.id, u.name, COUNT(o.id) AS order_count\nFROM users u\nLEFT JOIN orders o ON u.id = o.user_id\nWHERE u.status = 'active'\nGROUP BY u.id, u.name\nHAVING COUNT(o.id) > 0\nORDER BY order_count DESC;`,
+            explain: `|--Clustered Index Scan(OBJECT:([dbo].[users]))\n|--Hash Match(Inner Join, HASH:([u].[id])=([o].[user_id]))\n|--Clustered Index Scan(OBJECT:([dbo].[orders]))`,
+            tables: [
+                ['users', 'CREATE TABLE users (id INT PRIMARY KEY, name NVARCHAR(100), status NVARCHAR(20));', '120000', '500MB', true, 'id', false, '', ''],
+                ['orders', 'CREATE TABLE orders (id INT PRIMARY KEY, user_id INT, amount DECIMAL(10,2), created_at DATETIME);', '500000', '2GB', true, 'id', true, 'user_id', 'users']
+            ],
+            indexes: [
+                ['idx_status', 'users', 'CREATE INDEX idx_status ON users(status);', '50MB'],
+                ['idx_orders_user', 'orders', 'CREATE INDEX idx_orders_user ON orders(user_id);', '200MB']
+            ]
+        },
+        oracle: {
+            sql: `SELECT u.id, u.name, COUNT(o.id) AS order_count\nFROM users u\nLEFT JOIN orders o ON u.id = o.user_id\nWHERE u.status = 'active'\nGROUP BY u.id, u.name\nHAVING COUNT(o.id) > 0\nORDER BY order_count DESC`,
+            explain: `SELECT STATEMENT\n  HASH JOIN\n    TABLE ACCESS FULL USERS\n    TABLE ACCESS FULL ORDERS`,
+            tables: [
+                ['users', 'CREATE TABLE users (id NUMBER PRIMARY KEY, name VARCHAR2(100), status VARCHAR2(20));', '120000', '500MB', true, 'id', false, '', ''],
+                ['orders', 'CREATE TABLE orders (id NUMBER PRIMARY KEY, user_id NUMBER, amount NUMBER, created_at DATE);', '500000', '2GB', true, 'id', true, 'user_id', 'users']
+            ],
+            indexes: [
+                ['idx_status', 'users', 'CREATE INDEX idx_status ON users(status);', '50MB'],
+                ['idx_orders_user', 'orders', 'CREATE INDEX idx_orders_user ON orders(user_id);', '200MB']
+            ]
+        },
+        sqlite: {
+            sql: `SELECT u.id, u.name, COUNT(o.id) AS order_count\nFROM users u\nLEFT JOIN orders o ON u.id = o.user_id\nWHERE u.status = 'active'\nGROUP BY u.id, u.name\nHAVING COUNT(o.id) > 0\nORDER BY order_count DESC\nLIMIT 10;`,
+            explain: `SCAN TABLE users\nSEARCH TABLE orders USING INDEX idx_orders_user (user_id=?)`,
+            tables: [
+                ['users', 'CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, status TEXT);', '120000', '500MB', true, 'id', false, '', ''],
+                ['orders', 'CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER, amount REAL, created_at TEXT);', '500000', '2GB', true, 'id', true, 'user_id', 'users']
+            ],
+            indexes: [
+                ['idx_status', 'users', 'CREATE INDEX idx_status ON users(status);', '50MB'],
+                ['idx_orders_user', 'orders', 'CREATE INDEX idx_orders_user ON orders(user_id);', '200MB']
+            ]
+        }
+    };
+
+    const sample = samples[dbEngine] || samples['postgresql'];
+
+    // 2. Set SQL Query
+    document.getElementById('sql_query_textarea').value = sample.sql;
+    // 3. Set DB engine (in case user wants to switch sample after changing engine)
+    document.getElementById('db_engine_select').value = dbEngine;
+    // 4. Set EXPLAIN plan
+    document.getElementById('explain_plan_textarea').value = sample.explain;
+    // 5. Clear and add sample tables
     const tablesContainer = document.getElementById('tables-container');
     tablesContainer.innerHTML = '';
-    addTable('users', 'CREATE TABLE users (id INT PRIMARY KEY, name TEXT, status TEXT);', '120000', '500MB', true, 'id', false, '', '');
-    addTable('orders', 'CREATE TABLE orders (id INT PRIMARY KEY, user_id INT, amount NUMERIC, created_at TIMESTAMP);', '500000', '2GB', true, 'id', true, 'user_id', 'users');
-    // 5. Clear and add sample indexes
+    sample.tables.forEach(args => addTable(...args));
+    // 6. Clear and add sample indexes
     const indexesContainer = document.getElementById('indexes-container');
     indexesContainer.innerHTML = '';
-    addIndex('idx_status', 'users', 'CREATE INDEX idx_status ON users(status);', '50MB');
-    addIndex('idx_orders_user', 'orders', 'CREATE INDEX idx_orders_user ON orders(user_id);', '200MB');
-    // 6. Trigger validation and tooltips
+    sample.indexes.forEach(args => addIndex(...args));
+    // 7. Trigger validation and tooltips
     if (window.bootstrap && bootstrap.Tooltip) {
         var newInputs = document.querySelectorAll('[title]');
         newInputs.forEach(function (el) {
             new bootstrap.Tooltip(el);
         });
     }
-    // 7. Trigger validation for SQL and EXPLAIN
+    // 8. Trigger validation for SQL and EXPLAIN
     if (typeof update === 'function') update(reserved_words);
     if (typeof validateExplain === 'function') validateExplain();
-    // 8. Announce to screen readers
+    // 9. Announce to screen readers
     const feedback = document.getElementById('sql_query_feedback');
     if (feedback) {
         feedback.innerHTML = 'Sample data loaded.';
@@ -1112,6 +1258,11 @@ function useTemplate(templateKey) {
     }
 }
 </script>
+
+<!-- Sticky Analyze Button -->
+<button id="sticky-analyze-btn" type="submit" form="sql-form" class="btn btn-primary btn-lg" title="Analyze SQL">
+    <i class="fas fa-search me-2"></i>Analyze SQL
+</button>
 
 <!-- Template Library Modal -->
 <div class="modal fade" id="templateLibraryModal" tabindex="-1" aria-labelledby="templateLibraryModalLabel" aria-hidden="true">

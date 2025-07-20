@@ -2,13 +2,16 @@ from flask import Flask, render_template, request, redirect, url_for, flash, ses
 from flask_wtf import FlaskForm
 from wtforms import TextAreaField, SubmitField, SelectField
 from wtforms.validators import DataRequired
-from flask_wtf.csrf import CSRFProtect
+from flask_wtf.csrf import CSRFProtect, CSRFError
 import os
 import csv
 import json
 import hashlib
 import time
+import re
 from io import StringIO
+import sqlparse
+from explain_keywords import EXPLAIN_KEYWORDS
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'change_this_secret_key')
@@ -88,23 +91,114 @@ def analyze_sql_query(sql_query, tables, indexes, db_engine, explain_plan=None):
         return analyze_generic(sql_query, tables, indexes, explain_plan)
 
 def analyze_mysql(sql_query, tables, indexes, explain_plan=None):
-    # Basic MySQL analysis
+    import re
+    import sqlparse
     recommendations = []
     warnings = []
+    optimized_query = None
     summary = []
-    
-    # Calculate performance score
-    performance_score = calculate_performance_score(sql_query, tables, indexes, warnings, recommendations, explain_plan)
-    
-    # Calculate performance metrics
-    performance_metrics = calculate_performance_metrics(sql_query, tables, indexes, 'mysql')
-    
+    explain_mermaid = parse_explain_plan_to_mermaid(explain_plan, 'mysql')
+    alias_to_table = get_alias_to_table_mapping(sql_query)
+    detected_engine = detect_engine_from_explain(explain_plan)
+    if detected_engine and detected_engine != 'mysql':
+        msg = f"It looks like your EXPLAIN plan is for {detected_engine.capitalize()}, but you selected MySQL. Please choose the correct database engine for accurate analysis."
+        warnings.append(msg)
+        summary.insert(0, msg)
+        recommendations.insert(0, {'text': msg, 'actionable': False, 'sub': [], 'key': ('engine_mismatch',)})
+        return {
+            'engine': 'MySQL',
+            'summary': summary,
+            'recommendations': recommendations,
+            'warnings': warnings,
+            'engine_mismatch': True
+        }
+    if re.search(r'SELECT\s+\*', sql_query, re.IGNORECASE):
+        recommendations.append({
+            'text': "Replace SELECT * with explicit column names for better performance and maintainability.",
+            'actionable': True, 'sub': [], 'key': ('query', 'select_star')
+        })
+        warnings.append("Avoid using SELECT *. Specify only the columns you need for better performance and maintainability.")
+        optimized_query = re.sub(r'SELECT\s+\*', 'SELECT <columns>', sql_query, flags=re.IGNORECASE)
+        summary.append("Query uses SELECT *.")
+    parsed = sqlparse.parse(sql_query)
+    lines = sql_query.splitlines()
+    for stmt in parsed:
+        tokens = list(stmt.flatten())
+        join_indices = [i for i, t in enumerate(tokens) if t.match(sqlparse.tokens.Keyword, 'JOIN', regex=False)]
+        for idx in join_indices:
+            table_token = tokens[idx + 1] if idx + 1 < len(tokens) else None
+            table_name = table_token.value if table_token and table_token.value.strip() else '(unknown)'
+            for lineno, line in enumerate(lines, 1):
+                if table_name in line and 'JOIN' in line.upper():
+                    break
+            else:
+                lineno = '?'
+            has_on = False
+            for t in tokens[idx+2:idx+6]:
+                if t.match(sqlparse.tokens.Keyword, 'ON', regex=False):
+                    has_on = True
+                    break
+            if not has_on:
+                warn_msg = f"JOIN without ON clause for table {table_name} (line {lineno})"
+                recommendations.append({
+                    'text': f"Add an ON clause to the JOIN for table {table_name} (line {lineno}) to avoid cartesian products and improve performance.",
+                    'actionable': True, 'sub': [], 'key': ('join', table_name, lineno)
+                })
+                warnings.append(warn_msg)
+                summary.append(warn_msg)
+    if re.search(r'FROM\s*\(\s*SELECT', sql_query, re.IGNORECASE):
+        recommendations.append({
+            'text': "Consider rewriting subqueries in FROM clause as JOINs for better performance and readability.",
+            'actionable': True, 'sub': [], 'key': ('query', 'subquery_to_join')
+        })
+        summary.append("Query uses subquery in FROM clause.")
+    # FTS-aware recommendations first
+    fts_index_recs = recommend_indexes_for_fts_tables(sql_query, indexes, alias_to_table, tables, explain_plan, 'mysql')
+    recommendations.extend(fts_index_recs)
+    # Build set of all (table, column) pairs covered by FTS logic
+    covered_pairs = set()
+    for rec in fts_index_recs:
+        if 'key' in rec and rec['key'][0] in ('fts_index', 'fts_index_exists'):
+            table = str(rec['key'][1]).strip().lower()
+            column = str(rec['key'][2]).strip().lower()
+            covered_pairs.add((table, column))
+    # Only add general index recommendations for columns/tables not covered by FTS logic
+    for rec in get_real_column_index_recommendations(sql_query, indexes, alias_to_table, tables):
+        if 'key' in rec and rec['key'][0] == 'index':
+            table = str(rec['key'][1]).strip().lower()
+            column = str(rec['key'][2]).strip().lower()
+            if (table, column) not in covered_pairs:
+                recommendations.append(rec)
+        else:
+            recommendations.append(rec)
+    # Deduplicate recommendations by (table, column, type)
+    seen = set()
+    deduped_recs = []
+    for rec in recommendations:
+        if 'key' in rec and rec['key'][0] in ('fts_index', 'fts_index_exists', 'index'):
+            table = str(rec['key'][1]).strip().lower()
+            column = str(rec['key'][2]).strip().lower()
+            key = (rec['key'][0], table, column)
+        else:
+            key = rec['key'] if isinstance(rec, dict) and 'key' in rec else rec
+        if key not in seen:
+            deduped_recs.append(rec)
+            seen.add(key)
+    recommendations = deduped_recs
+    if not indexes:
+        recommendations.append({
+            'text': "No indexes provided. Consider adding indexes on columns used in WHERE, JOIN, and ORDER BY clauses.",
+            'actionable': False, 'sub': [], 'key': ('index', 'none', 'none')
+        })
+    performance_score = calculate_performance_score(sql_query, tables, indexes, warnings, len([r for r in recommendations if r.get('actionable')]), explain_plan, db_engine='mysql')
+    performance_metrics = calculate_performance_metrics(sql_query, tables, indexes, 'mysql', explain_plan, [r for r in recommendations if r.get('actionable')])
     return {
         'engine': 'MySQL',
         'summary': summary or ['MySQL-specific analysis will appear here.'],
         'recommendations': recommendations,
         'warnings': warnings,
-        'optimized_query': None,
+        'optimized_query': optimized_query,
+        'explain_mermaid': explain_mermaid,
         'performance_score': performance_score,
         'performance_metrics': performance_metrics
     }
@@ -129,117 +223,49 @@ def parse_size_to_mb(size_str):
         return value * 1024
     return 0.0
 
-def calculate_performance_score(sql_query, tables, indexes, warnings, recommendations, explain_plan=None):
-    """
-    Calculate a performance score from 1-100 based on query analysis.
-    Higher score = better performance.
-    """
-    score = 100  # Start with perfect score
-    
-    # Deduct points for various issues
-    deductions = []
-    
-    # SELECT * penalty (major issue)
-    if 'SELECT *' in sql_query.upper():
-        score -= 15
-        deductions.append("SELECT * usage (-15 points)")
-    
-    # Missing WHERE clause (major issue)
-    if 'WHERE' not in sql_query.upper():
-        score -= 20
-        deductions.append("No WHERE clause (-20 points)")
-    
-    # JOIN without ON clause (major issue)
-    if 'JOIN' in sql_query.upper() and 'ON' not in sql_query.upper():
-        score -= 25
-        deductions.append("JOIN without ON clause (-25 points)")
-    
-    # Warning penalties
-    for warning in warnings:
-        if 'SELECT *' in warning:
-            continue  # Already counted
-        elif 'WHERE clause' in warning:
-            continue  # Already counted
-        elif 'PRIMARY KEY' in warning:
-            score -= 10
-            deductions.append("Missing PRIMARY KEY (-10 points)")
-        elif '100,000 rows' in warning:
-            score -= 8
-            deductions.append("Large table without optimization (-8 points)")
-        elif '1GB' in warning or '10GB' in warning:
-            score -= 12
-            deductions.append("Large table size (-12 points)")
-        elif 'Sequential Scan' in warning or 'Seq Scan' in warning:
-            score -= 15
-            deductions.append("Sequential scan detected (-15 points)")
-        else:
-            score -= 5
-            deductions.append("General warning (-5 points)")
-    
-    # Missing indexes penalty
-    missing_index_count = len([r for r in recommendations if 'index' in r.lower() and 'adding' in r.lower()])
-    if missing_index_count > 0:
-        score -= min(missing_index_count * 8, 20)  # Max 20 points for missing indexes
-        deductions.append(f"Missing indexes (-{min(missing_index_count * 8, 20)} points)")
-    
-    # Large table penalties
-    large_table_count = 0
-    for table in tables:
-        if table.get('rows'):
-            try:
-                if int(table['rows']) > 1000000:  # 1M+ rows
-                    large_table_count += 1
-            except:
-                pass
-    
-    if large_table_count > 0:
-        score -= min(large_table_count * 5, 15)
-        deductions.append(f"Very large tables (-{min(large_table_count * 5, 15)} points)")
-    
-    # Bonus points for good practices
-    bonuses = []
-    
-    # Has proper WHERE clause
-    if 'WHERE' in sql_query.upper():
-        score += 5
-        bonuses.append("Proper WHERE clause (+5 points)")
-    
-    # Has indexes provided
-    if len(indexes) > 0:
-        score += 8
-        bonuses.append("Indexes provided (+8 points)")
-    
-    # Has table information provided
-    if len(tables) > 0:
-        score += 5
-        bonuses.append("Table information provided (+5 points)")
-    
-    # Bonus for primary keys
-    primary_key_count = sum(1 for t in tables if t.get('has_primary_key') and t.get('primary_key_column'))
-    if primary_key_count > 0:
-        score += primary_key_count * 3
-        bonuses.append(f"Primary keys defined (+{primary_key_count * 3} points)")
-    
-    # Bonus for foreign keys
-    foreign_key_count = sum(1 for t in tables if t.get('has_foreign_key') and t.get('foreign_key_column'))
-    if foreign_key_count > 0:
-        score += foreign_key_count * 2
-        bonuses.append(f"Foreign keys defined (+{foreign_key_count * 2} points)")
-    
-    # Has EXPLAIN plan
-    if explain_plan:
-        score += 3
-        bonuses.append("EXPLAIN plan provided (+3 points)")
-    
-    # Specific column selection (not SELECT *)
-    if 'SELECT' in sql_query.upper() and '*' not in sql_query.upper():
+def calculate_performance_score(sql_query, tables, indexes, warnings, actionable_keys_count, explain_plan=None, db_engine=None, actionable_recommendations=None):
+    score = 100
+    breakdown_dict = {}
+    score_capped_reason = None
+    def add_item(category, type_, reason, points, context):
+        if category not in breakdown_dict:
+            breakdown_dict[category] = []
+        breakdown_dict[category].append({'type': type_, 'reason': reason, 'points': points, 'context': context})
+    # Plan-driven deductions
+    fts_tables = extract_fts_tables_from_explain(explain_plan, db_engine) if explain_plan and db_engine else set()
+    num_fts = len(fts_tables)
+    if num_fts > 0:
+        pts = -min(num_fts * 20, 60)
+        score += pts
+        for t in fts_tables:
+            add_item('Execution Plan', 'deduction', f'Full Table Scan detected on {t}', -20, t)
+    # Plan-driven index recommendations
+    alias_to_table = get_alias_to_table_mapping(sql_query)
+    fts_index_recs = recommend_indexes_for_fts_tables(sql_query, indexes, alias_to_table, tables, explain_plan, db_engine) if explain_plan and db_engine else []
+    num_missing_indexes = len([rec for rec in fts_index_recs if rec['key'][0] == 'fts_index'])
+    num_investigation = len([rec for rec in fts_index_recs if rec['key'][0] == 'fts_index_exists'])
+    if num_missing_indexes > 0:
+        pts = -min(num_missing_indexes * 15, 45)
+        score += pts
+        add_item('Indexing', 'deduction', f'{num_missing_indexes} missing index(es) for FTS tables', pts, f'{num_missing_indexes} missing indexes')
+    if num_investigation > 0:
+        pts = -min(num_investigation * 10, 30)
+        score += pts
+        add_item('Indexing', 'deduction', f'{num_investigation} index(es) not used by optimizer (investigation needed)', pts, f'{num_investigation} index not used')
+    # Bonuses for actual index usage in plan
+    keywords = EXPLAIN_KEYWORDS.get(db_engine, {}) if db_engine else {}
+    index_scan_keywords = keywords.get('index', [])
+    if explain_plan and any(kw in explain_plan for kw in index_scan_keywords):
         score += 10
-        bonuses.append("Specific column selection (+10 points)")
-    
-    # Ensure score stays within bounds
+        add_item('Execution Plan', 'bonus', 'Index usage detected in EXPLAIN plan', 10, 'Index scan in plan')
+    # Cap score and set grade
     score = max(1, min(100, score))
-    
-    # Determine performance level
+    total_deductions = sum(item['points'] for items in breakdown_dict.values() for item in items if item['type'] == 'deduction')
+    total_bonuses = sum(item['points'] for items in breakdown_dict.values() for item in items if item['type'] == 'bonus')
+    if num_fts > 0 or num_missing_indexes > 0 or num_investigation > 0:
+        if score > 90:
+            score = 90
+            score_capped_reason = 'Score capped due to FTS or missing/unused indexes.'
     if score >= 90:
         performance_level = "Excellent"
         performance_color = "success"
@@ -255,23 +281,95 @@ def calculate_performance_score(sql_query, tables, indexes, warnings, recommenda
     else:
         performance_level = "Very Poor"
         performance_color = "danger"
-    
+    calculation = f"100 + {total_bonuses} (strengths) - {abs(total_deductions)} (areas for improvement) = {score}"
+    if score_capped_reason:
+        calculation += f" ({score_capped_reason})"
+    breakdown = [{'category': cat, 'items': items} for cat, items in breakdown_dict.items()]
     return {
         'score': score,
         'level': performance_level,
         'color': performance_color,
-        'deductions': deductions,
-        'bonuses': bonuses,
-        'total_deductions': sum([int(d.split('(')[1].split()[0]) for d in deductions if '(' in d]),
-        'total_bonuses': sum([int(b.split('(')[1].split()[0]) for b in bonuses if '(' in b])
+        'breakdown': breakdown,
+        'calculation': calculation,
     }
 
-def calculate_performance_metrics(sql_query, tables, indexes, db_engine):
-    """Calculate detailed performance metrics for the query"""
+def generate_category_summary(group):
+    """Generate a human-readable summary for a category"""
+    category = group['category']
+    items = group['items']
+    
+    deductions = [item for item in items if item['type'] == 'deduction']
+    bonuses = [item for item in items if item['type'] == 'bonus']
+    
+    if category == 'Query Structure':
+        if bonuses and not deductions:
+            return "Well-structured query with good practices"
+        elif deductions and not bonuses:
+            return "Query structure needs improvement"
+        elif bonuses and deductions:
+            return "Mixed query structure with both strengths and areas for improvement"
+        else:
+            return "Basic query structure"
+    
+    elif category == 'Indexing':
+        if bonuses and not deductions:
+            return "Excellent index coverage"
+        elif deductions and not bonuses:
+            return "Indexing strategy needs improvement"
+        elif bonuses and deductions:
+            return "Good index coverage with room for optimization"
+        else:
+            return "No index information provided"
+    
+    elif category == 'Table Design':
+        if bonuses and not deductions:
+            return "Well-designed tables with proper constraints"
+        elif deductions and not bonuses:
+            return "Table design needs improvement"
+        elif bonuses and deductions:
+            return "Good table design with some optimization opportunities"
+        else:
+            return "Basic table design"
+    
+    elif category == 'Execution Plan':
+        if bonuses and not deductions:
+            return "Good execution plan analysis"
+        elif deductions and not bonuses:
+            return "Execution plan shows performance issues"
+        elif bonuses and deductions:
+            return "Mixed execution plan with both efficient and inefficient operations"
+        else:
+            return "No execution plan provided"
+    
+    else:  # General
+        if bonuses and not deductions:
+            return "Good overall practices"
+        elif deductions and not bonuses:
+            return "Several areas need attention"
+        elif bonuses and deductions:
+            return "Mixed performance indicators"
+        else:
+            return "No specific issues identified"
+
+def generate_overall_summary(breakdown, score, total_bonuses, total_deductions):
+    """Generate an overall summary sentence"""
+    if score >= 90:
+        return f"Excellent performance! Your query is well-optimized with strong practices across all categories."
+    elif score >= 75:
+        return f"Good performance with {total_bonuses} points in strengths and {total_deductions} points in areas for improvement. Minor optimizations could further enhance performance."
+    elif score >= 60:
+        return f"Fair performance with {total_bonuses} points in strengths and {total_deductions} points in areas for improvement. Several optimizations are recommended."
+    elif score >= 40:
+        return f"Poor performance with {total_bonuses} points in strengths and {total_deductions} points in areas for improvement. Significant optimizations are needed."
+    else:
+        return f"Very poor performance with {total_bonuses} points in strengths and {total_deductions} points in areas for improvement. Major restructuring is recommended."
+
+def calculate_performance_metrics(sql_query, tables, indexes, db_engine, explain_plan=None, actionable_recommendations=None):
     metrics = {
-        'estimated_execution_time': 'Unknown',
-        'estimated_rows_scanned': 0,
-        'estimated_memory_usage': 'Unknown',
+        'estimated_execution_time': {'value': 'Unknown', 'source': 'unknown'},
+        'estimated_rows_scanned': {'value': 'Unknown', 'source': 'unknown'},
+        'estimated_memory_usage': {'value': 'Unknown', 'source': 'unknown'},
+        'cost': {'value': 'Unknown', 'source': 'unknown'},
         'complexity_score': 0,
         'index_utilization': 0,
         'join_complexity': 0,
@@ -282,221 +380,170 @@ def calculate_performance_metrics(sql_query, tables, indexes, db_engine):
         'data_access_pattern': 'Unknown',
         'optimization_potential': 0
     }
-    
     try:
-        # Parse SQL to extract components
         sql_upper = sql_query.upper()
-        
-        # Calculate complexity score (1-100)
         complexity = 0
-        
-        # Base complexity
-        complexity += 10
-        
-        # JOIN complexity
         join_count = sql_upper.count('JOIN')
         complexity += join_count * 15
         metrics['join_complexity'] = join_count
-        
-        # Aggregation complexity
-        agg_functions = ['COUNT', 'SUM', 'AVG', 'MAX', 'MIN', 'GROUP BY', 'HAVING']
-        agg_count = sum(sql_upper.count(func) for func in agg_functions)
+        agg_functions = ['COUNT', 'SUM', 'AVG', 'MAX', 'MIN']
+        agg_count = 0
+        import sqlparse
+        parsed = sqlparse.parse(sql_query)
+        for stmt in parsed:
+            for token in stmt.tokens:
+                if isinstance(token, sqlparse.sql.IdentifierList):
+                    for ident in token.get_identifiers():
+                        for func in agg_functions:
+                            if func in ident.value.upper():
+                                agg_count += 1
+                elif isinstance(token, sqlparse.sql.Function):
+                    for func in agg_functions:
+                        if func in token.get_name().upper():
+                            agg_count += 1
+                elif token.ttype is None and 'GROUP BY' in token.value.upper():
+                    agg_count += 1
+                elif token.ttype is None and 'HAVING' in token.value.upper():
+                    agg_count += 1
         complexity += agg_count * 8
         metrics['aggregation_complexity'] = agg_count
-        
-        # Subquery complexity
-        subquery_count = sql_upper.count('SELECT') - 1  # Subtract main SELECT
+        subquery_count = sql_upper.count('SELECT') - 1
         complexity += subquery_count * 20
-        
-        # Window function complexity
         window_count = sql_upper.count('OVER')
         complexity += window_count * 12
-        
-        # JSON complexity
         json_ops = ['->>', '->', 'JSONB_', 'JSON_']
         json_count = sum(sql_upper.count(op) for op in json_ops)
         complexity += json_count * 5
-        
-        # CTE complexity
         cte_count = sql_upper.count('WITH')
         complexity += cte_count * 10
-        
         metrics['complexity_score'] = min(complexity, 100)
-        
-        # Estimate rows scanned based on tables
-        total_rows = 0
-        if tables:
-            for table in tables:
-                try:
-                    rows_str = str(table.get('rows', '0'))
-                    rows_str = rows_str.replace(',', '').replace('K', '000').replace('M', '000000').replace('B', '000000000')
-                    rows = int(rows_str)
-                    total_rows += rows
-                except:
-                    total_rows += 10000  # Default estimate
-        
-        metrics['estimated_rows_scanned'] = total_rows
-        
-        # Calculate index utilization
-        index_count = len(indexes) if indexes else 0
-        table_count = len(tables) if tables else 1
-        metrics['index_utilization'] = min((index_count / table_count) * 100, 100)
-        
-        # Estimate execution time based on complexity and data size
-        base_time = 0.1  # Base time in seconds
-        
-        # Time based on complexity
-        time_multiplier = 1 + (complexity / 100)
-        
-        # Time based on data size
-        if total_rows > 1000000:  # 1M+ rows
-            time_multiplier *= 3
-        elif total_rows > 100000:  # 100K+ rows
-            time_multiplier *= 2
-        elif total_rows > 10000:  # 10K+ rows
-            time_multiplier *= 1.5
-        
-        # Time based on joins
-        time_multiplier += join_count * 0.5
-        
-        # Time based on aggregations
-        time_multiplier += agg_count * 0.3
-        
-        estimated_time = base_time * time_multiplier
-        
-        if estimated_time < 0.5:
-            metrics['estimated_execution_time'] = f"{estimated_time:.2f}s"
-        elif estimated_time < 60:
-            metrics['estimated_execution_time'] = f"{estimated_time:.1f}s"
+        # --- Extract from EXPLAIN plan if possible ---
+        plan_metrics = extract_explain_plan_metrics(explain_plan, db_engine) if explain_plan else {}
+        # Rows scanned
+        if plan_metrics and plan_metrics.get('rows_scanned') is not None:
+            metrics['estimated_rows_scanned'] = {'value': plan_metrics['rows_scanned'], 'source': 'from plan'}
+        # Cost
+        if plan_metrics and plan_metrics.get('cost') is not None:
+            metrics['cost'] = {'value': plan_metrics['cost'], 'source': 'from plan'}
+        # Memory
+        if plan_metrics and plan_metrics.get('memory') is not None:
+            mem_val = plan_metrics['memory']
+            if mem_val < 1:
+                mem_str = f"{mem_val*1024:.0f}KB"
+            elif mem_val < 1024:
+                mem_str = f"{mem_val:.1f}MB"
+            else:
+                mem_str = f"{mem_val/1024:.1f}GB"
+            metrics['estimated_memory_usage'] = {'value': mem_str, 'source': 'from plan'}
+        # Time
+        if plan_metrics and plan_metrics.get('time') is not None:
+            tval = plan_metrics['time']
+            if tval < 0.5:
+                tstr = f"{tval:.2f}s"
+            elif tval < 60:
+                tstr = f"{tval:.1f}s"
+            else:
+                tstr = f"{tval/60:.1f}min"
+            metrics['estimated_execution_time'] = {'value': tstr, 'source': 'from plan'}
+        # --- Plan-driven Index Utilization and Data Access Pattern ---
+        explain_plan_str = explain_plan if explain_plan else ''
+        keywords = EXPLAIN_KEYWORDS.get(db_engine, {})
+        index_scan_keywords = keywords.get('index', [])
+        table_scan_keywords = keywords.get('table', []) + keywords.get('sequential', []) + keywords.get('full_scan', []) + keywords.get('scan', [])
+        # Index Utilization
+        if any(kw in explain_plan_str for kw in table_scan_keywords):
+            metrics['index_utilization'] = 0
+        elif any(kw in explain_plan_str for kw in index_scan_keywords):
+            metrics['index_utilization'] = 100
         else:
-            metrics['estimated_execution_time'] = f"{estimated_time/60:.1f}min"
-        
-        # Estimate memory usage
-        memory_mb = total_rows * 0.001  # Rough estimate: 1KB per row
-        if memory_mb < 1:
-            metrics['estimated_memory_usage'] = f"{memory_mb*1024:.0f}KB"
-        elif memory_mb < 1024:
-            metrics['estimated_memory_usage'] = f"{memory_mb:.1f}MB"
-        else:
-            metrics['estimated_memory_usage'] = f"{memory_mb/1024:.1f}GB"
-        
-        # Determine resource intensity
-        if complexity > 80 or total_rows > 1000000:
-            metrics['resource_intensity'] = 'Very High'
-        elif complexity > 60 or total_rows > 100000:
-            metrics['resource_intensity'] = 'High'
-        elif complexity > 40 or total_rows > 10000:
-            metrics['resource_intensity'] = 'Medium'
-        else:
-            metrics['resource_intensity'] = 'Low'
-        
-        # Calculate performance grade
-        grade_score = 100
-        grade_score -= complexity * 0.5
-        grade_score -= join_count * 5
-        grade_score += metrics['index_utilization'] * 0.3
-        
-        if grade_score >= 90:
-            metrics['performance_grade'] = 'A'
-        elif grade_score >= 80:
-            metrics['performance_grade'] = 'B'
-        elif grade_score >= 70:
-            metrics['performance_grade'] = 'C'
-        elif grade_score >= 60:
-            metrics['performance_grade'] = 'D'
-        else:
-            metrics['performance_grade'] = 'F'
-        
-        # Calculate query efficiency
-        efficiency = 100
-        if 'SELECT *' in sql_upper:
-            efficiency -= 20
-        if 'WHERE' not in sql_upper:
-            efficiency -= 30
-        if join_count > 3:
-            efficiency -= join_count * 5
-        if agg_count > 2:
-            efficiency -= agg_count * 3
-        
-        metrics['query_efficiency'] = max(efficiency, 0)
-        
-        # Determine data access pattern
-        if 'INDEX' in sql_upper or metrics['index_utilization'] > 50:
-            metrics['data_access_pattern'] = 'Indexed'
-        elif 'SCAN' in sql_upper or total_rows > 100000:
+            metrics['index_utilization'] = 0
+        # Data Access Pattern
+        if any(kw in explain_plan_str for kw in table_scan_keywords):
             metrics['data_access_pattern'] = 'Full Scan'
+        elif any(kw in explain_plan_str for kw in index_scan_keywords):
+            metrics['data_access_pattern'] = 'Indexed'
         elif join_count > 0:
             metrics['data_access_pattern'] = 'Join-based'
         else:
             metrics['data_access_pattern'] = 'Simple'
-        
-        # Calculate optimization potential
-        optimization = 0
-        if metrics['index_utilization'] < 50:
-            optimization += 30
-        if 'SELECT *' in sql_upper:
-            optimization += 20
-        if 'WHERE' not in sql_upper:
-            optimization += 25
-        if join_count > 2:
-            optimization += 15
-        if complexity > 60:
-            optimization += 10
-        
-        metrics['optimization_potential'] = min(optimization, 100)
-        
-        # Add database-specific adjustments
-        if db_engine == 'postgresql':
-            if 'JSONB' in sql_upper:
-                time_str = metrics['estimated_execution_time']
-                if 's' in time_str:
-                    time_val = float(time_str.replace('s', ''))
-                    metrics['estimated_execution_time'] = f"{time_val * 1.2:.2f}s"
-                elif 'min' in time_str:
-                    time_val = float(time_str.replace('min', ''))
-                    metrics['estimated_execution_time'] = f"{time_val * 1.2:.1f}min"
-        elif db_engine == 'mysql':
-            if 'JSON' in sql_upper:
-                time_str = metrics['estimated_execution_time']
-                if 's' in time_str:
-                    time_val = float(time_str.replace('s', ''))
-                    metrics['estimated_execution_time'] = f"{time_val * 1.5:.2f}s"
-                elif 'min' in time_str:
-                    time_val = float(time_str.replace('min', ''))
-                    metrics['estimated_execution_time'] = f"{time_val * 1.5:.1f}min"
-        
+        # --- Improved Optimization Potential Calculation ---
+        # 1. Count FTS tables and estimate their size/rows from plan
+        fts_tables = extract_fts_tables_from_explain(explain_plan, db_engine) if explain_plan and db_engine else set()
+        fts_row_count = 0
+        large_fts_tables = 0
+        if plan_metrics and 'fts_table_rows' in plan_metrics:
+            # plan_metrics['fts_table_rows'] should be a dict {table: row_count}
+            for table, rows in plan_metrics['fts_table_rows'].items():
+                fts_row_count += rows
+                if rows >= 100000:
+                    large_fts_tables += 1
+        else:
+            # fallback: if no row info, count FTS tables
+            large_fts_tables = len(fts_tables)
+        actionable_total = len(actionable_recommendations or [])
+        # Heuristic: high optimization potential if multiple FTS on large tables or any FTS tables (even without row info)
+        if large_fts_tables >= 2:
+            metrics['optimization_potential'] = 100
+        elif large_fts_tables == 1:
+            metrics['optimization_potential'] = 80
+        elif len(fts_tables) > 0:
+            metrics['optimization_potential'] = 60
+        elif actionable_total > 0:
+            metrics['optimization_potential'] = min(40 + actionable_total * 10, 80)
+        else:
+            metrics['optimization_potential'] = 0
+        # Performance Grade
+        if metrics['index_utilization'] == 100 and metrics['data_access_pattern'] == 'Indexed' and metrics['optimization_potential'] == 0:
+            metrics['performance_grade'] = 'A'
+        elif metrics['index_utilization'] >= 60 and metrics['optimization_potential'] <= 20:
+            metrics['performance_grade'] = 'B'
+        elif metrics['index_utilization'] >= 40 and metrics['optimization_potential'] <= 40:
+            metrics['performance_grade'] = 'C'
+        elif metrics['index_utilization'] >= 20:
+            metrics['performance_grade'] = 'D'
+        else:
+            metrics['performance_grade'] = 'F'
+        # Remove or hide any metric that cannot be made accurate (already done by fallback to 'Unknown')
     except Exception as e:
-        # Fallback values if calculation fails
-        metrics['estimated_execution_time'] = 'Unknown'
-        metrics['complexity_score'] = 50
         metrics['performance_grade'] = 'C'
-        metrics['query_efficiency'] = 50
-        metrics['optimization_potential'] = 50
-    
     return metrics
 
 def analyze_postgresql(sql_query, tables, indexes, explain_plan=None):
-    """
-    Analyze a PostgreSQL query for performance issues using static analysis and best practices.
-    Now uses sqlparse to provide line numbers and table names for JOIN issues.
-    """
     import re
     import sqlparse
+    from explain_keywords import EXPLAIN_KEYWORDS
     recommendations = []
     warnings = []
     optimized_query = None
     summary = []
-    explain_mermaid = None
-    # JOIN/ON analysis (improved)
-    lines = sql_query.splitlines()
+    explain_mermaid = parse_explain_plan_to_mermaid(explain_plan, 'postgresql')
+    alias_to_table = get_alias_to_table_mapping(sql_query)
+    detected_engine = detect_engine_from_explain(explain_plan)
+    if detected_engine and detected_engine != 'postgresql':
+        msg = f"It looks like your EXPLAIN plan is for {detected_engine.capitalize()}, but you selected PostgreSQL. Please choose the correct database engine for accurate analysis."
+        warnings.append(msg)
+        summary.insert(0, msg)
+        recommendations.insert(0, {'text': msg, 'actionable': False, 'sub': [], 'key': ('engine_mismatch',)})
+        return {
+            'engine': 'PostgreSQL',
+            'summary': summary,
+            'recommendations': recommendations,
+            'warnings': warnings,
+            'engine_mismatch': True
+        }
+    if re.search(r'SELECT\s+\*', sql_query, re.IGNORECASE):
+        recommendations.append({'text': "Replace SELECT * with explicit column names for better performance and maintainability.", 'actionable': True, 'sub': [], 'key': ('query', 'select_star')})
+        summary.append("Query uses SELECT *; consider selecting only needed columns.")
+        warnings.append("Avoid using SELECT *. Specify only the columns you need for better performance and maintainability.")
+        optimized_query = re.sub(r'SELECT\s+\*', 'SELECT <columns>', sql_query, flags=re.IGNORECASE)
     parsed = sqlparse.parse(sql_query)
+    lines = sql_query.splitlines()
     for stmt in parsed:
         tokens = list(stmt.flatten())
         join_indices = [i for i, t in enumerate(tokens) if t.match(sqlparse.tokens.Keyword, 'JOIN', regex=False)]
         for idx in join_indices:
             table_token = tokens[idx + 1] if idx + 1 < len(tokens) else None
             table_name = table_token.value if table_token and table_token.value.strip() else '(unknown)'
-            join_text = ' '.join(t.value for t in tokens[max(0, idx-2):idx+3])
             for lineno, line in enumerate(lines, 1):
                 if table_name in line and 'JOIN' in line.upper():
                     break
@@ -509,117 +556,48 @@ def analyze_postgresql(sql_query, tables, indexes, explain_plan=None):
                     break
             if not has_on:
                 warn_msg = f"JOIN without ON clause for table {table_name} (line {lineno})"
-                if table_name != '(unknown)' or lineno != '?':
-                    summary.append(warn_msg)
-    # SELECT *
-    if re.search(r'SELECT\s+\*', sql_query, re.IGNORECASE):
-        warnings.append("Avoid using SELECT *. Specify only the columns you need for better performance and maintainability.")
-        summary.append("Query uses SELECT *.")
-    # WHERE clause
-    if not re.search(r'WHERE\s', sql_query, re.IGNORECASE):
-        warnings.append("Query does not have a WHERE clause. This may result in full table scans and poor performance on large tables.")
-        summary.append("No WHERE clause detected.")
-    # Check for missing indexes on WHERE columns
-    where_cols = re.findall(r'WHERE\s+([\w\.]+)', sql_query, re.IGNORECASE)
-    for col in where_cols:
-        found = False
-        for idx in indexes:
-            if idx['definition'] and col in idx['definition']:
-                found = True
-                break
-        if not found:
-            summary.append(f"Possible missing index on {col}.")
-            recommendations.append(f"Consider adding an index on column '{col}' used in WHERE clause for better performance.")
-    # Check for primary key presence in each table
-    for t in tables:
-        if t.get('has_primary_key') and t.get('primary_key_column'):
-            # Table has primary key defined
-            primary_key_col = t['primary_key_column']
-            recommendations.append(f"Table '{t['name']}' has primary key on '{primary_key_col}'. Ensure this column is used in WHERE clauses for optimal performance.")
-        elif t['ddl'] and 'PRIMARY KEY' not in t['ddl'].upper():
-            warnings.append(f"Table '{t['name']}' does not have a PRIMARY KEY. Every table should have a PRIMARY KEY for best performance and data integrity.")
-        
-        # Check for foreign key relationships
-        if t.get('has_foreign_key') and t.get('foreign_key_column') and t.get('foreign_key_table'):
-            foreign_key_col = t['foreign_key_column']
-            foreign_table = t['foreign_key_table']
-            recommendations.append(f"Table '{t['name']}' has foreign key '{foreign_key_col}' referencing '{foreign_table}'. Consider adding indexes on foreign key columns for better JOIN performance.")
-            
-            # Check if there's an index on the foreign key
-            has_fk_index = False
-            for idx in indexes:
-                if idx['table'] == t['name'] and foreign_key_col in idx['definition']:
-                    has_fk_index = True
-                    break
-            
-            if not has_fk_index:
-                recommendations.append(f"Add an index on foreign key column '{foreign_key_col}' in table '{t['name']}' for better JOIN performance with '{foreign_table}'.")
-    # Large table scan risk
-    for t in tables:
-        if t['name'] and t['rows']:
-            try:
-                if int(t['rows']) > 100000:
-                    warnings.append(f"Table {t['name']} has more than 100,000 rows. Ensure queries on this table are well-indexed and optimized.")
-            except Exception:
-                pass
-    # Table size analysis (granular, flexible units)
-    for t in tables:
-        try:
-            size_mb = parse_size_to_mb(t.get('size', 0) or 0)
-            if size_mb > 10000:
-                warnings.append(f"Table '{t['name']}' is larger than 10GB. Strongly consider partitioning and regular maintenance.")
-                recommendations.append(f"Partition and regularly maintain table '{t['name']}' for optimal performance.")
-                summary.append(f"Table '{t['name']}' exceeds 10GB and may impact performance.")
-            elif size_mb > 1000:
-                warnings.append(f"Table '{t['name']}' is larger than 1GB. Consider partitioning or archiving old data.")
-                recommendations.append(f"Partition or archive data in table '{t['name']}' to improve performance.")
-                summary.append(f"Table '{t['name']}' exceeds 1GB and may impact performance.")
-        except Exception:
-            pass
-    # Index size analysis (granular, flexible units)
-    for idx in indexes:
-        try:
-            size_mb = parse_size_to_mb(idx.get('size', 0) or 0)
-            if size_mb > 2000:
-                warnings.append(f"Index '{idx['name']}' on table '{idx['table']}' is larger than 2GB. Review index usage and necessity.")
-                recommendations.append(f"Drop unused or redundant indexes on '{idx['table']}'.")
-                summary.append(f"Index '{idx['name']}' exceeds 2GB and may impact performance.")
-            elif size_mb > 500:
-                warnings.append(f"Index '{idx['name']}' on table '{idx['table']}' is larger than 500MB. Consider index compression or partitioning.")
-                recommendations.append(f"Consider compressing or partitioning index '{idx['name']}' on table '{idx['table']}'.")
-                summary.append(f"Index '{idx['name']}' exceeds 500MB and may impact performance.")
-        except Exception:
-            pass
-    # EXPLAIN plan analysis
-    if explain_plan:
-        for t in tables:
-            if t['name'] and t['name'] in explain_plan and 'Seq Scan' in explain_plan:
-                warn_msg = f"EXPLAIN plan shows a Sequential Scan on table '{t['name']}'. Consider adding indexes or rewriting the query to enable index usage."
+                recommendations.append({'text': f"Add an ON clause to the JOIN for table {table_name} (line {lineno}) to avoid cartesian products and improve performance.", 'actionable': True, 'sub': [], 'key': ('join', table_name, lineno)})
                 warnings.append(warn_msg)
-                summary.append(f"Sequential Scan detected in EXPLAIN plan for table {t['name']}.")
-                for col in where_cols:
-                    if t['name'] in col:
-                        recommendations.append(f"For table '{t['name']}', consider adding an index on column '{col.split('.')[-1]}' to avoid sequential scan.")
-            if t['name'] and t['name'] in explain_plan and 'Index Scan' in explain_plan:
-                recommendations.append(f"EXPLAIN plan shows Index Scan on table '{t['name']}'. This is generally good, but ensure the right index is being used.")
-                summary.append(f"Index Scan detected in EXPLAIN plan for table {t['name']}.")
-            if t['name'] and t['name'] in explain_plan and ('Bitmap Heap Scan' in explain_plan or 'Bitmap Index Scan' in explain_plan):
-                recommendations.append(f"Bitmap scans on table '{t['name']}' can be efficient for some queries, but may indicate missing composite indexes.")
-                summary.append(f"Bitmap Scan detected in EXPLAIN plan for table {t['name']}.")
-    recommendations.append("Use EXPLAIN (ANALYZE, BUFFERS) before your query to see the actual execution plan and identify bottlenecks.")
-    if re.search(r'SELECT\s+\*', sql_query, re.IGNORECASE):
-        optimized_query = re.sub(r'SELECT\s+\*', 'SELECT <columns>', sql_query, flags=re.IGNORECASE)
-    # Deduplicate recommendations, warnings, and summary
-    recommendations = list(dict.fromkeys(recommendations))
+                summary.append(warn_msg)
+    if re.search(r'FROM\s*\(\s*SELECT', sql_query, re.IGNORECASE):
+        recommendations.append({'text': "Consider rewriting subqueries in FROM clause as JOINs for better performance and readability.", 'actionable': True, 'sub': [], 'key': ('query', 'subquery_to_join')})
+        summary.append("Query uses subquery in FROM clause.")
+    recommendations.extend(get_real_column_index_recommendations(sql_query, indexes, alias_to_table, tables))
+    # FTS table summary and recommendations
+    fts_tables = extract_fts_tables_from_explain(explain_plan, 'postgresql') if explain_plan else set()
+    if fts_tables:
+        summary.append(f"Full Table Scan detected on: {', '.join(sorted(fts_tables))}")
+        for fts_table in fts_tables:
+            recommendations.append({'text': f"Table '{fts_table}' is accessed via Full Table Scan. Review for possible indexing or query rewrite.", 'actionable': True, 'sub': [], 'key': ('fts_review', fts_table)})
+    actionable_recs = [r for r in recommendations if r.get('actionable')]
+    if not indexes and not actionable_recs:
+        recommendations.append({'text': "No indexes provided. Consider adding indexes on columns used in WHERE, JOIN, and ORDER BY clauses.", 'actionable': False, 'sub': [], 'key': ('index', 'none', 'none')})
+    # Deduplicate recommendations
+    seen = set()
+    deduped_recs = []
+    for rec in recommendations:
+        key = rec['key'] if isinstance(rec, dict) and 'key' in rec else rec
+        if key not in seen:
+            deduped_recs.append(rec)
+            seen.add(key)
+    deduped_recs.sort(key=lambda r: not (isinstance(r, dict) and r.get('actionable')))
+    recommendations = deduped_recs
     warnings = list(dict.fromkeys(warnings))
     summary = list(dict.fromkeys(summary))
-    
-    # Calculate performance score
-    performance_score = calculate_performance_score(sql_query, tables, indexes, warnings, recommendations, explain_plan)
-    
-    # Calculate performance metrics
-    performance_metrics = calculate_performance_metrics(sql_query, tables, indexes, 'postgresql')
-    
+    if not recommendations:
+        recommendations = [{'text': 'No actionable recommendations 🎉', 'actionable': False, 'sub': [], 'key': ('none',)}]
+    if not summary:
+        summary = ['No summary available for this query.']
+    actionable_keys_count = 0
+    if recommendations and isinstance(recommendations[0], dict):
+        actionable_keys = set(r['key'] for r in recommendations if r.get('actionable'))
+        actionable_keys_count = len(actionable_keys)
+    performance_score = calculate_performance_score(sql_query, tables, indexes, warnings, actionable_keys_count, explain_plan, db_engine='postgresql')
+    performance_metrics = calculate_performance_metrics(sql_query, tables, indexes, 'postgresql', explain_plan, [r for r in recommendations if r.get('actionable')])
+    fts_index_recs = recommend_indexes_for_fts_tables(sql_query, indexes, alias_to_table, tables, explain_plan, 'postgresql')
+    for rec in fts_index_recs:
+        if rec['key'] not in [r['key'] for r in recommendations if isinstance(r, dict) and 'key' in r]:
+            recommendations.append(rec)
     return {
         'engine': 'PostgreSQL',
         'summary': summary,
@@ -632,111 +610,194 @@ def analyze_postgresql(sql_query, tables, indexes, explain_plan=None):
     }
 
 def analyze_sqlserver(sql_query, tables, indexes, explain_plan=None):
-    # Basic SQL Server analysis
+    import re
+    import sqlparse
     recommendations = []
     warnings = []
+    optimized_query = None
     summary = []
-    
-    # Calculate performance score
-    performance_score = calculate_performance_score(sql_query, tables, indexes, warnings, recommendations, explain_plan)
-    
-    # Calculate performance metrics
+    explain_mermaid = parse_explain_plan_to_mermaid(explain_plan, 'sqlserver')
+    alias_to_table = get_alias_to_table_mapping(sql_query)
+    detected_engine = detect_engine_from_explain(explain_plan)
+    if detected_engine and detected_engine != 'sqlserver':
+        msg = f"It looks like your EXPLAIN plan is for {detected_engine.capitalize()}, but you selected SQL Server. Please choose the correct database engine for accurate analysis."
+        warnings.append(msg)
+        summary.insert(0, msg)
+        recommendations.insert(0, {'text': msg, 'actionable': False, 'sub': [], 'key': ('engine_mismatch',)})
+        return {
+            'engine': 'SQL Server',
+            'summary': summary,
+            'recommendations': recommendations,
+            'warnings': warnings,
+            'engine_mismatch': True
+        }
+    if re.search(r'SELECT\s+\*', sql_query, re.IGNORECASE):
+        recommendations.append({
+            'text': "Replace SELECT * with explicit column names for better performance and maintainability.",
+            'actionable': True, 'sub': [], 'key': ('query', 'select_star')
+        })
+        warnings.append("Avoid using SELECT *. Specify only the columns you need for better performance and maintainability.")
+        optimized_query = re.sub(r'SELECT\s+\*', 'SELECT <columns>', sql_query, flags=re.IGNORECASE)
+        summary.append("Query uses SELECT *.")
+    parsed = sqlparse.parse(sql_query)
+    lines = sql_query.splitlines()
+    for stmt in parsed:
+        tokens = list(stmt.flatten())
+        join_indices = [i for i, t in enumerate(tokens) if t.match(sqlparse.tokens.Keyword, 'JOIN', regex=False)]
+        for idx in join_indices:
+            table_token = tokens[idx + 1] if idx + 1 < len(tokens) else None
+            table_name = table_token.value if table_token and table_token.value.strip() else '(unknown)'
+            for lineno, line in enumerate(lines, 1):
+                if table_name in line and 'JOIN' in line.upper():
+                    break
+            else:
+                lineno = '?'
+            has_on = False
+            for t in tokens[idx+2:idx+6]:
+                if t.match(sqlparse.tokens.Keyword, 'ON', regex=False):
+                    has_on = True
+                    break
+            if not has_on:
+                warn_msg = f"JOIN without ON clause for table {table_name} (line {lineno})"
+                recommendations.append({
+                    'text': f"Add an ON clause to the JOIN for table {table_name} (line {lineno}) to avoid cartesian products and improve performance.",
+                    'actionable': True, 'sub': [], 'key': ('join', table_name, lineno)
+                })
+                warnings.append(warn_msg)
+                summary.append(warn_msg)
+    if re.search(r'FROM\s*\(\s*SELECT', sql_query, re.IGNORECASE):
+        recommendations.append({
+            'text': "Consider rewriting subqueries in FROM clause as JOINs for better performance and readability.",
+            'actionable': True, 'sub': [], 'key': ('query', 'subquery_to_join')
+        })
+        summary.append("Query uses subquery in FROM clause.")
+    recommendations.extend(get_real_column_index_recommendations(sql_query, indexes, alias_to_table, tables))
+    if not indexes:
+        recommendations.append({
+            'text': "No indexes provided. Consider adding indexes on columns used in WHERE, JOIN, and ORDER BY clauses.",
+            'actionable': False, 'sub': [], 'key': ('index', 'none', 'none')
+        })
+    performance_score = calculate_performance_score(sql_query, tables, indexes, warnings, len([r for r in recommendations if r.get('actionable')]), explain_plan)
     performance_metrics = calculate_performance_metrics(sql_query, tables, indexes, 'sqlserver')
-    
+    if explain_plan:
+        keywords = EXPLAIN_KEYWORDS['sqlserver']
+        if any(kw in explain_plan for kw in keywords.get('sequential', []) + keywords.get('table', []) + keywords.get('full_scan', []) + keywords.get('scan', [])):
+            recommendations.append({'text': "EXPLAIN plan shows a Table Scan. Consider adding indexes or rewriting the query to enable index usage.", 'actionable': True, 'sub': [], 'key': ('scan',)})
+            summary.append("Table Scan detected in EXPLAIN plan.")
+    # FTS index recommendations
+    fts_index_recs = recommend_indexes_for_fts_tables(sql_query, indexes, alias_to_table, tables, explain_plan, 'sqlserver')
+    for rec in fts_index_recs:
+        if rec['key'] not in [r['key'] for r in recommendations if isinstance(r, dict) and 'key' in r]:
+            recommendations.append(rec)
     return {
         'engine': 'SQL Server',
         'summary': summary or ['SQL Server-specific analysis will appear here.'],
         'recommendations': recommendations,
         'warnings': warnings,
-        'optimized_query': None,
+        'optimized_query': optimized_query,
+        'explain_mermaid': explain_mermaid,
         'performance_score': performance_score,
         'performance_metrics': performance_metrics
     }
 
 def analyze_oracle(sql_query, tables, indexes, explain_plan=None):
+    import re
+    import sqlparse
+    from explain_keywords import EXPLAIN_KEYWORDS
     recommendations = []
     warnings = []
     optimized_query = None
     summary = []
-    explain_mermaid = None
-    import re
-    # Table size analysis (granular, flexible units)
-    for t in tables:
-        try:
-            size_mb = parse_size_to_mb(t.get('size', 0) or 0)
-            if size_mb > 10000:
-                warnings.append(f"Table '{t['name']}' is larger than 10GB. Strongly consider partitioning and regular maintenance.")
-                recommendations.append(f"Partition and regularly maintain table '{t['name']}' for optimal performance.")
-                summary.append(f"Table '{t['name']}' exceeds 10GB and may impact performance.")
-            elif size_mb > 1000:
-                warnings.append(f"Table '{t['name']}' is larger than 1GB. Consider partitioning or archiving old data.")
-                recommendations.append(f"Partition or archive data in table '{t['name']}' to improve performance.")
-                summary.append(f"Table '{t['name']}' exceeds 1GB and may impact performance.")
-        except Exception:
-            pass
-    # Index size analysis (granular, flexible units)
-    for idx in indexes:
-        try:
-            size_mb = parse_size_to_mb(idx.get('size', 0) or 0)
-            if size_mb > 2000:
-                warnings.append(f"Index '{idx['name']}' on table '{idx['table']}' is larger than 2GB. Review index usage and necessity.")
-                recommendations.append(f"Drop unused or redundant indexes on '{idx['table']}'.")
-                summary.append(f"Index '{idx['name']}' exceeds 2GB and may impact performance.")
-            elif size_mb > 500:
-                warnings.append(f"Index '{idx['name']}' on table '{idx['table']}' is larger than 500MB. Consider index compression or partitioning.")
-                recommendations.append(f"Consider compressing or partitioning index '{idx['name']}' on table '{idx['table']}'.")
-                summary.append(f"Index '{idx['name']}' exceeds 500MB and may impact performance.")
-        except Exception:
-            pass
-    # Oracle EXPLAIN PLAN parsing (simple)
-    if explain_plan:
-        lines = [l for l in explain_plan.splitlines() if '|' in l and not l.strip().startswith('-') and not l.strip().startswith('Id')]
-        nodes = []
-        edges = []
-        id_to_node = {}
-        parent_stack = []
-        prev_indent = 0
-        for i, line in enumerate(lines):
-            parts = [p.strip() for p in line.strip('|').split('|')]
-            if len(parts) < 3:
-                continue
-            node_id = parts[0].replace('*','').strip()
-            operation = parts[1]
-            name = parts[2]
-            label = f"{operation} {name}".strip()
-            node_name = f"N{node_id}"
-            nodes.append(f'{node_name}["{label}"]')
-            id_to_node[node_id] = node_name
-            # Detect parent by indentation (simple fallback)
-            indent = len(line) - len(line.lstrip())
-            if i > 0 and indent > prev_indent:
-                parent_stack.append(last_node_id)
-            elif i > 0 and indent < prev_indent and parent_stack:
-                parent_stack.pop()
-            if parent_stack:
-                edges.append(f'{id_to_node[parent_stack[-1]]} --> {node_name}')
-            prev_indent = indent
-            last_node_id = node_id
-            # Recommendations
-            if 'TABLE ACCESS FULL' in operation.upper():
-                warnings.append(f"Full table scan detected on {name}. Consider adding an index or rewriting the query.")
-                summary.append(f"Full table scan on {name}.")
-            if 'INDEX RANGE SCAN' in operation.upper():
-                recommendations.append(f"Index range scan used on {name}. This is efficient if the right index is chosen.")
-                summary.append(f"Index range scan on {name}.")
-        if nodes:
-            explain_mermaid = 'graph TD\n' + '\n'.join(nodes + edges)
-    recommendations.append("Use EXPLAIN PLAN FOR ... and DBMS_XPLAN.DISPLAY to review Oracle execution plans.")
-    recommendations = list(dict.fromkeys(recommendations))
+    explain_mermaid = parse_explain_plan_to_mermaid(explain_plan, 'oracle')
+    alias_to_table = get_alias_to_table_mapping(sql_query)
+    detected_engine = detect_engine_from_explain(explain_plan)
+    if detected_engine and detected_engine != 'oracle':
+        msg = f"It looks like your EXPLAIN plan is for {detected_engine.capitalize()}, but you selected Oracle. Please choose the correct database engine for accurate analysis."
+        warnings.append(msg)
+        summary.insert(0, msg)
+        recommendations.insert(0, {'text': msg, 'actionable': False, 'sub': [], 'key': ('engine_mismatch',)})
+        return {
+            'engine': 'Oracle',
+            'summary': summary,
+            'recommendations': recommendations,
+            'warnings': warnings,
+            'engine_mismatch': True
+        }
+    if re.search(r'SELECT\s+\*', sql_query, re.IGNORECASE):
+        recommendations.append({
+            'text': "Replace SELECT * with explicit column names for better performance and maintainability.",
+            'actionable': True, 'sub': [], 'key': ('query', 'select_star')
+        })
+        warnings.append("Avoid using SELECT *. Specify only the columns you need for better performance and maintainability.")
+        optimized_query = re.sub(r'SELECT\s+\*', 'SELECT <columns>', sql_query, flags=re.IGNORECASE)
+        summary.append("Query uses SELECT *; consider selecting only needed columns.")
+    # Improved JOIN/ON detection: only warn if a JOIN truly lacks an ON clause
+    join_pattern = re.compile(r'JOIN\s+([\w\.]+)?', re.IGNORECASE)
+    join_matches = list(join_pattern.finditer(sql_query))
+    on_pattern = re.compile(r'ON\s+[^\n]+', re.IGNORECASE)
+    if join_matches:
+        for i, jm in enumerate(join_matches):
+            join_start = jm.end()
+            join_end = join_matches[i+1].start() if i+1 < len(join_matches) else len(sql_query)
+            join_block = sql_query[join_start:join_end]
+            if not on_pattern.search(join_block):
+                table_name = jm.group(1) if jm.group(1) else None
+                if table_name:
+                    warn_msg = f"JOIN without ON clause for table {table_name}"
+                    if warn_msg not in warnings:
+                        warnings.append(warn_msg)
+                        summary.append(warn_msg)
+                        recommendations.append({'text': f"Add an ON clause to the JOIN for table {table_name} to avoid cartesian products and improve performance.", 'actionable': True, 'sub': [], 'key': ('join', table_name)})
+                else:
+                    warn_msg = "JOIN without ON clause detected"
+                    if warn_msg not in warnings:
+                        warnings.append(warn_msg)
+                        summary.append(warn_msg)
+                        recommendations.append({'text': "Add ON clauses to all JOINs to avoid cartesian products and improve performance.", 'actionable': True, 'sub': [], 'key': ('join', 'generic')})
+    if re.search(r'FROM\s*\(\s*SELECT', sql_query, re.IGNORECASE):
+        recommendations.append({
+            'text': "Consider rewriting subqueries in FROM clause as JOINs for better performance and readability.",
+            'actionable': True, 'sub': [], 'key': ('query', 'subquery_to_join')
+        })
+        summary.append("Query uses subquery in FROM clause.")
+    recommendations.extend(get_real_column_index_recommendations(sql_query, indexes, alias_to_table, tables))
+    # FTS table summary and recommendations
+    fts_tables = extract_fts_tables_from_explain(explain_plan, 'oracle') if explain_plan else set()
+    if fts_tables:
+        summary.append(f"Full Table Scan detected on: {', '.join(sorted(fts_tables))}")
+        for fts_table in fts_tables:
+            recommendations.append({'text': f"Table '{fts_table}' is accessed via Full Table Scan. Review for possible indexing or query rewrite.", 'actionable': True, 'sub': [], 'key': ('fts_review', fts_table)})
+    # Only show 'No indexes provided' if no actionable FTS/index recommendations exist
+    actionable_recs = [r for r in recommendations if r.get('actionable')]
+    if not indexes and not actionable_recs:
+        recommendations.append({'text': "No indexes provided. Consider adding indexes on columns used in WHERE, JOIN, and ORDER BY clauses.", 'actionable': False, 'sub': [], 'key': ('index', 'none', 'none')})
+    # Deduplicate recommendations
+    seen = set()
+    deduped_recs = []
+    for rec in recommendations:
+        key = rec['key'] if isinstance(rec, dict) and 'key' in rec else rec
+        if key not in seen:
+            deduped_recs.append(rec)
+            seen.add(key)
+    deduped_recs.sort(key=lambda r: not (isinstance(r, dict) and r.get('actionable')))
+    recommendations = deduped_recs
     warnings = list(dict.fromkeys(warnings))
     summary = list(dict.fromkeys(summary))
-    
-    # Calculate performance score
-    performance_score = calculate_performance_score(sql_query, tables, indexes, warnings, recommendations, explain_plan)
-    
-    # Calculate performance metrics
-    performance_metrics = calculate_performance_metrics(sql_query, tables, indexes, 'oracle')
-    
+    if not recommendations:
+        recommendations = [{'text': 'No actionable recommendations 🎉', 'actionable': False, 'sub': [], 'key': ('none',)}]
+    if not summary:
+        summary = ['No summary available for this query.']
+    actionable_keys_count = 0
+    if recommendations and isinstance(recommendations[0], dict):
+        actionable_keys = set(r['key'] for r in recommendations if r.get('actionable'))
+        actionable_keys_count = len(actionable_keys)
+    performance_score = calculate_performance_score(sql_query, tables, indexes, warnings, actionable_keys_count, explain_plan, db_engine='oracle')
+    performance_metrics = calculate_performance_metrics(sql_query, tables, indexes, 'oracle', explain_plan, [r for r in recommendations if r.get('actionable')])
+    # FTS index recommendations
+    fts_index_recs = recommend_indexes_for_fts_tables(sql_query, indexes, alias_to_table, tables, explain_plan, 'oracle')
+    for rec in fts_index_recs:
+        if rec['key'] not in [r['key'] for r in recommendations if isinstance(r, dict) and 'key' in r]:
+            recommendations.append(rec)
     return {
         'engine': 'Oracle',
         'summary': summary,
@@ -749,23 +810,92 @@ def analyze_oracle(sql_query, tables, indexes, explain_plan=None):
     }
 
 def analyze_sqlite(sql_query, tables, indexes, explain_plan=None):
-    # Basic SQLite analysis
+    import re
+    import sqlparse
     recommendations = []
     warnings = []
+    optimized_query = None
     summary = []
-    
-    # Calculate performance score
-    performance_score = calculate_performance_score(sql_query, tables, indexes, warnings, recommendations, explain_plan)
-    
-    # Calculate performance metrics
+    explain_mermaid = parse_explain_plan_to_mermaid(explain_plan, 'sqlite')
+    alias_to_table = get_alias_to_table_mapping(sql_query)
+    detected_engine = detect_engine_from_explain(explain_plan)
+    if detected_engine and detected_engine != 'sqlite':
+        msg = f"It looks like your EXPLAIN plan is for {detected_engine.capitalize()}, but you selected SQLite. Please choose the correct database engine for accurate analysis."
+        warnings.append(msg)
+        summary.insert(0, msg)
+        recommendations.insert(0, {'text': msg, 'actionable': False, 'sub': [], 'key': ('engine_mismatch',)})
+        return {
+            'engine': 'SQLite',
+            'summary': summary,
+            'recommendations': recommendations,
+            'warnings': warnings,
+            'engine_mismatch': True
+        }
+    if re.search(r'SELECT\s+\*', sql_query, re.IGNORECASE):
+        recommendations.append({
+            'text': "Replace SELECT * with explicit column names for better performance and maintainability.",
+            'actionable': True, 'sub': [], 'key': ('query', 'select_star')
+        })
+        warnings.append("Avoid using SELECT *. Specify only the columns you need for better performance and maintainability.")
+        optimized_query = re.sub(r'SELECT\s+\*', 'SELECT <columns>', sql_query, flags=re.IGNORECASE)
+        summary.append("Query uses SELECT *.")
+    parsed = sqlparse.parse(sql_query)
+    lines = sql_query.splitlines()
+    for stmt in parsed:
+        tokens = list(stmt.flatten())
+        join_indices = [i for i, t in enumerate(tokens) if t.match(sqlparse.tokens.Keyword, 'JOIN', regex=False)]
+        for idx in join_indices:
+            table_token = tokens[idx + 1] if idx + 1 < len(tokens) else None
+            table_name = table_token.value if table_token and table_token.value.strip() else '(unknown)'
+            for lineno, line in enumerate(lines, 1):
+                if table_name in line and 'JOIN' in line.upper():
+                    break
+            else:
+                lineno = '?'
+            has_on = False
+            for t in tokens[idx+2:idx+6]:
+                if t.match(sqlparse.tokens.Keyword, 'ON', regex=False):
+                    has_on = True
+                    break
+            if not has_on:
+                warn_msg = f"JOIN without ON clause for table {table_name} (line {lineno})"
+                recommendations.append({
+                    'text': f"Add an ON clause to the JOIN for table {table_name} (line {lineno}) to avoid cartesian products and improve performance.",
+                    'actionable': True, 'sub': [], 'key': ('join', table_name, lineno)
+                })
+                warnings.append(warn_msg)
+                summary.append(warn_msg)
+    if re.search(r'FROM\s*\(\s*SELECT', sql_query, re.IGNORECASE):
+        recommendations.append({
+            'text': "Consider rewriting subqueries in FROM clause as JOINs for better performance and readability.",
+            'actionable': True, 'sub': [], 'key': ('query', 'subquery_to_join')
+        })
+        summary.append("Query uses subquery in FROM clause.")
+    recommendations.extend(get_real_column_index_recommendations(sql_query, indexes, alias_to_table, tables))
+    if not indexes:
+        recommendations.append({
+            'text': "No indexes provided. Consider adding indexes on columns used in WHERE, JOIN, and ORDER BY clauses.",
+            'actionable': False, 'sub': [], 'key': ('index', 'none', 'none')
+        })
+    performance_score = calculate_performance_score(sql_query, tables, indexes, warnings, len([r for r in recommendations if r.get('actionable')]), explain_plan)
     performance_metrics = calculate_performance_metrics(sql_query, tables, indexes, 'sqlite')
-    
+    if explain_plan:
+        keywords = EXPLAIN_KEYWORDS['sqlite']
+        if any(kw in explain_plan for kw in keywords.get('sequential', []) + keywords.get('table', []) + keywords.get('full_scan', []) + keywords.get('scan', [])):
+            recommendations.append({'text': "EXPLAIN plan shows a Full Table Scan. Consider adding indexes or rewriting the query to enable index usage.", 'actionable': True, 'sub': [], 'key': ('scan',)})
+            summary.append("Full Table Scan detected in EXPLAIN plan.")
+    # FTS index recommendations
+    fts_index_recs = recommend_indexes_for_fts_tables(sql_query, indexes, alias_to_table, tables, explain_plan, 'sqlite')
+    for rec in fts_index_recs:
+        if rec['key'] not in [r['key'] for r in recommendations if isinstance(r, dict) and 'key' in r]:
+            recommendations.append(rec)
     return {
         'engine': 'SQLite',
         'summary': summary or ['SQLite-specific analysis will appear here.'],
         'recommendations': recommendations,
         'warnings': warnings,
-        'optimized_query': None,
+        'optimized_query': optimized_query,
+        'explain_mermaid': explain_mermaid,
         'performance_score': performance_score,
         'performance_metrics': performance_metrics
     }
@@ -775,6 +905,9 @@ def analyze_generic(sql_query, tables, indexes, explain_plan=None):
     recommendations = []
     warnings = []
     summary = []
+    
+    # Generate EXPLAIN plan visualization
+    explain_mermaid = parse_explain_plan_to_mermaid(explain_plan, 'generic')
     
     # Calculate performance score
     performance_score = calculate_performance_score(sql_query, tables, indexes, warnings, recommendations, explain_plan)
@@ -788,6 +921,7 @@ def analyze_generic(sql_query, tables, indexes, explain_plan=None):
         'recommendations': recommendations,
         'warnings': warnings,
         'optimized_query': None,
+        'explain_mermaid': explain_mermaid,
         'performance_score': performance_score,
         'performance_metrics': performance_metrics
     }
@@ -843,7 +977,19 @@ def index():
                     idx += 1
                 else:
                     break
-            return render_template('index.html', form=form, tables=tables, indexes=indexes)
+            if db_engine == 'mysql':
+                report = analyze_mysql(sql_query, tables, indexes, explain_plan)
+            elif db_engine == 'postgresql':
+                report = analyze_postgresql(sql_query, tables, indexes, explain_plan)
+            elif db_engine == 'sqlserver':
+                report = analyze_sqlserver(sql_query, tables, indexes, explain_plan)
+            elif db_engine == 'oracle':
+                report = analyze_oracle(sql_query, tables, indexes, explain_plan)
+            elif db_engine == 'sqlite':
+                report = analyze_sqlite(sql_query, tables, indexes, explain_plan)
+            else:
+                report = analyze_generic(sql_query, tables, indexes, explain_plan)
+            return render_template('result.html', form=form, report=report, tables=tables, indexes=indexes, db_engine=db_engine, sql_query=sql_query)
         sql_query = form.sql_query.data
         db_engine = form.db_engine.data or 'postgresql'
         explain_plan = form.explain_plan.data
@@ -937,7 +1083,6 @@ def clear_history_ajax():
 @app.route('/download_history_csv')
 def download_history_csv():
     history = session.get('history', [])
-    print('DEBUG: session["history"] =', history)  # Debug print
     si = StringIO()
     writer = csv.writer(si)
     writer.writerow(['SQL Query', 'Database Engine', 'Summary', 'Recommendations', 'Warnings', 'Optimized Query'])
@@ -1514,19 +1659,757 @@ def copy_shared_analysis():
 
 @app.route('/beautify_sql', methods=['POST'])
 def beautify_sql():
-    import sqlparse
-    print('--- /beautify_sql endpoint called ---')
-    print('Headers:', dict(request.headers))
-    print('Data:', request.data)
     try:
         data = request.get_json(force=True, silent=False)
-        print('Parsed JSON:', data)
         sql = data.get('sql', '') if data else ''
         formatted = sqlparse.format(sql, reindent=True, keyword_case='upper')
         return jsonify({'beautified': formatted})
     except Exception as e:
-        print('Error:', e)
         return jsonify({'error': 'Invalid request or JSON: ' + str(e)}), 400
+
+@app.route('/generate_explain_visualization', methods=['POST'])
+def generate_explain_visualization():
+    """Generate EXPLAIN plan visualization from text or CSV input"""
+    try:
+        data = request.get_json()
+        explain_plan = data.get('explain_plan', '')
+        db_engine = data.get('db_engine', 'postgresql')
+
+        if not explain_plan:
+            return jsonify({'success': False, 'error': 'No EXPLAIN plan provided'})
+
+        # Engine mismatch detection
+        detected_engine = detect_engine_from_explain(explain_plan)
+        if detected_engine and detected_engine != db_engine:
+            msg = f"Engine Mismatch: It looks like your EXPLAIN plan is for {detected_engine.capitalize()}, but you selected {db_engine.capitalize()}. Please choose the correct database engine for accurate visualization."
+            return jsonify({'success': False, 'error': msg, 'engine_mismatch': True})
+
+        # Parse the EXPLAIN plan and generate Mermaid code
+        mermaid_code = parse_explain_plan_to_mermaid(explain_plan, db_engine)
+
+        if mermaid_code:
+            return jsonify({
+                'success': True,
+                'mermaid_code': mermaid_code,
+                'message': 'Visualization generated successfully'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Could not parse EXPLAIN plan. Please check the format.'
+            })
+
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Error generating visualization: {str(e)}'
+        }), 500
+
+def parse_explain_plan_to_mermaid(explain_plan, db_engine='postgresql'):
+    """
+    Parse EXPLAIN plan output and convert to Mermaid.js flowchart.
+    Supports CSV data and text input for multiple database engines.
+    """
+    if not explain_plan or not explain_plan.strip():
+        return None
+    
+    try:
+        # For MySQL with pipe separators, use text parser
+        if db_engine == 'mysql' and '|' in explain_plan and 'select_type' in explain_plan:
+            return parse_text_explain_plan(explain_plan, db_engine)
+        # Try to parse as CSV first
+        elif '\n' in explain_plan and any(',' in line for line in explain_plan.split('\n')[:3]):
+            return parse_csv_explain_plan(explain_plan, db_engine)
+        else:
+            return parse_text_explain_plan(explain_plan, db_engine)
+    except Exception as e:
+        return None
+
+def parse_csv_explain_plan(csv_data, db_engine):
+    """Parse CSV-formatted EXPLAIN plan data"""
+    import csv
+    from io import StringIO
+    
+    nodes = []
+    edges = []
+    node_id_map = {}
+    parent_stack = []
+    
+    # Parse CSV
+    csv_reader = csv.DictReader(StringIO(csv_data))
+    
+    for row in csv_reader:
+        # Extract node information based on database engine
+        if db_engine == 'postgresql':
+            node_id = row.get('Node Type', row.get('node_type', 'N'))
+            operation = row.get('Operation', row.get('operation', ''))
+            table_name = row.get('Table Name', row.get('table_name', ''))
+            cost = row.get('Cost', row.get('cost', ''))
+            rows = row.get('Rows', row.get('rows', ''))
+            width = row.get('Width', row.get('width', ''))
+            
+            # Create node label
+            label_parts = [operation]
+            if table_name:
+                label_parts.append(f"on {table_name}")
+            if cost:
+                label_parts.append(f"(cost={cost})")
+            if rows:
+                label_parts.append(f"rows={rows}")
+            if width:
+                label_parts.append(f"width={width}")
+            
+            label = " ".join(label_parts)
+            
+        elif db_engine == 'mysql':
+            node_id = row.get('id', row.get('ID', 'N'))
+            select_type = row.get('select_type', row.get('SELECT_TYPE', ''))
+            table = row.get('table', row.get('TABLE', ''))
+            type_val = row.get('type', row.get('TYPE', ''))
+            key = row.get('key', row.get('KEY', ''))
+            rows = row.get('rows', row.get('ROWS', ''))
+            extra = row.get('extra', row.get('Extra', ''))
+            
+            # Create meaningful label
+            label_parts = []
+            if select_type and select_type != 'NULL':
+                label_parts.append(select_type)
+            
+            if table and table != 'NULL':
+                label_parts.append(f"on {table}")
+            
+            if type_val and type_val != 'NULL':
+                label_parts.append(f"({type_val})")
+            
+            if key and key != 'NULL':
+                label_parts.append(f"key={key}")
+            
+            if rows and rows != 'NULL':
+                label_parts.append(f"rows={rows}")
+            
+            if extra and extra != 'NULL':
+                # Truncate extra info if too long
+                if len(extra) > 30:
+                    extra = extra[:27] + "..."
+                label_parts.append(extra)
+            
+            label = " ".join(label_parts)
+            
+            # Skip empty labels
+            if not label or label.strip() == "":
+                continue
+                
+            operation = select_type  # Use select_type as operation for styling
+            
+        elif db_engine == 'oracle':
+            node_id = row.get('id', row.get('ID', 'N'))
+            operation = row.get('operation', row.get('OPERATION', ''))
+            name = row.get('name', row.get('NAME', ''))
+            rows = row.get('rows', row.get('ROWS', ''))
+            cost = row.get('cost', row.get('COST', ''))
+            
+            label_parts = [operation]
+            if name:
+                label_parts.append(f"on {name}")
+            if cost:
+                label_parts.append(f"(cost={cost})")
+            if rows:
+                label_parts.append(f"rows={rows}")
+            
+            label = " ".join(label_parts)
+            
+        elif db_engine == 'sqlserver':
+            node_id = row.get('node_id', row.get('Node ID', 'N'))
+            physical_op = row.get('physical_op', row.get('Physical Op', ''))
+            logical_op = row.get('logical_op', row.get('Logical Op', ''))
+            table_name = row.get('table_name', row.get('Table Name', ''))
+            estimated_rows = row.get('estimated_rows', row.get('Estimated Rows', ''))
+            
+            label_parts = [physical_op]
+            if logical_op and logical_op != physical_op:
+                label_parts.append(f"({logical_op})")
+            if table_name:
+                label_parts.append(f"on {table_name}")
+            if estimated_rows:
+                label_parts.append(f"rows={estimated_rows}")
+            
+            label = " ".join(label_parts)
+            
+        else:  # Generic
+            node_id = row.get('id', row.get('ID', 'N'))
+            operation = row.get('operation', row.get('Operation', ''))
+            table = row.get('table', row.get('Table', ''))
+            
+            label_parts = [operation]
+            if table:
+                label_parts.append(f"on {table}")
+            
+            label = " ".join(label_parts)
+        
+        # Create unique node ID
+        unique_id = f"N{node_id}"
+        node_id_map[node_id] = unique_id
+        
+        # Add node with simple styling (no CSS classes for now)
+        nodes.append(f'{unique_id}["{label}"]')
+        
+        # Handle parent-child relationships
+        parent_id = row.get('parent_id', row.get('Parent ID', ''))
+        if parent_id and parent_id in node_id_map:
+            edges.append(f'{node_id_map[parent_id]} --> {unique_id}')
+    
+    if nodes:
+        return 'graph TD\n' + '\n'.join(nodes + edges)
+    
+    return None
+
+def parse_text_explain_plan(text_data, db_engine):
+    """Parse text-formatted EXPLAIN plan data with robust hierarchical parsing"""
+    nodes = []
+    edges = []
+    node_id_map = {}
+    parent_stack = []
+    lines = text_data.strip().split('\n')
+    skip_patterns = ['---', '===', 'QUERY PLAN', 'Planning Time:', 'Execution Time:']
+    for i, line in enumerate(lines):
+        line = line.strip()
+        if not line or any(pattern in line for pattern in skip_patterns):
+            continue
+        original_line = lines[i]
+        indent = len(original_line) - len(original_line.lstrip())
+        if db_engine == 'oracle':
+            # Try pipe-delimited table format first
+            if '|' in line and not line.startswith('|--'):
+                if 'Id' in line and 'Operation' in line:
+                    continue
+                if line.startswith('|----'):
+                    continue
+                parts = [part.strip() for part in line.split('|')]
+                if len(parts) >= 3:
+                    id_val = parts[1]
+                    operation = parts[2]
+                    name = parts[3] if len(parts) > 3 else ''
+                    rows = parts[4] if len(parts) > 4 else ''
+                    cost = parts[5] if len(parts) > 5 else ''
+                    label_parts = []
+                    if operation and operation != 'NULL':
+                        label_parts.append(operation)
+                    if name and name != 'NULL':
+                        label_parts.append(f"on {name}")
+                    if cost and cost != 'NULL':
+                        label_parts.append(f"cost={cost}")
+                    if rows and rows != 'NULL':
+                        label_parts.append(f"rows={rows}")
+                    label = " ".join(label_parts)
+                    if not label or label.strip() == "":
+                        continue
+                    if len(label) > 80:
+                        label = label[:77] + "..."
+                    node_id = f"N{i}"
+                    nodes.append(f'{node_id}["{label}"]')
+                    if len(nodes) > 1:
+                        prev_node = f"N{i-1}"
+                        edges.append(f'{prev_node} --> {node_id}')
+                    continue
+            # Indented tree-like format (fallback)
+            # e.g. SELECT STATEMENT\n  HASH JOIN\n    TABLE ACCESS FULL USERS\n    TABLE ACCESS FULL ORDERS
+            label = line.strip()
+            if not label:
+                continue
+            if len(label) > 80:
+                label = label[:77] + "..."
+            node_id = f"N{i}"
+            nodes.append(f'{node_id}["{label}"]')
+            # Infer parent-child from indentation
+            while parent_stack and indent <= parent_stack[-1][1]:
+                parent_stack.pop()
+            if parent_stack:
+                parent_id = parent_stack[-1][0]
+                edges.append(f'{parent_id} --> {node_id}')
+            parent_stack.append((node_id, indent))
+        elif db_engine == 'postgresql':
+            # ... existing code ...
+            pass  # Unchanged
+        elif db_engine == 'mysql':
+            # ... existing code ...
+            pass  # Unchanged
+        elif db_engine == 'sqlserver':
+            # ... existing code ...
+            pass  # Unchanged
+        else:
+            # Generic fallback
+            if line.strip():
+                label = line.strip()
+                if len(label) > 80:
+                    label = label[:77] + "..."
+                node_id = f"N{i}"
+                nodes.append(f'{node_id}["{label}"]')
+                if len(nodes) > 1:
+                    prev_node = f"N{i-1}"
+                    edges.append(f'{prev_node} --> {node_id}')
+    if nodes:
+        mermaid_code = 'graph TD\n' + '\n'.join(nodes)
+        if edges:
+            mermaid_code += '\n' + '\n'.join(edges)
+        return mermaid_code
+    return None
+
+def get_node_style(operation, db_engine):
+    """Get Mermaid.js styling for different operation types"""
+    operation_lower = operation.lower()
+    
+    # Define color schemes for different operation types
+    if any(scan in operation_lower for scan in ['seq scan', 'table scan', 'full scan', 'table access full']):
+        return ':::seq-scan'
+    elif any(scan in operation_lower for scan in ['index scan', 'index range scan', 'index seek']):
+        return ':::index-scan'
+    elif any(join in operation_lower for join in ['hash join', 'nested loop', 'merge join', 'join']):
+        return ':::join'
+    elif any(agg in operation_lower for agg in ['aggregate', 'group', 'sort']):
+        return ':::aggregate'
+    elif any(filter in operation_lower for filter in ['filter', 'where']):
+        return ':::filter'
+    elif any(result in operation_lower for result in ['result', 'output']):
+        return ':::result'
+    else:
+        return ':::default'
+
+def get_alias_to_table_mapping(sql_query):
+    import re
+    alias_to_table = {}
+    from_join_pattern = re.compile(r'(FROM|JOIN)\s+([\w\"]+)(?:\s+AS)?\s+(\w+)', re.IGNORECASE)
+    for match in from_join_pattern.finditer(sql_query):
+        real_table = match.group(2).replace('"', '')
+        alias = match.group(3)
+        alias_to_table[alias] = real_table
+    return alias_to_table
+
+def get_real_column_index_recommendations(sql_query, indexes, alias_to_table, tables):
+    import re
+    where_cols = set()
+    orderby_cols = set()
+    join_cols = set()
+    for match in re.finditer(r'WHERE\s+([\w\.]+)', sql_query, re.IGNORECASE):
+        col = match.group(1)
+        where_cols.add(col)
+    for match in re.finditer(r'JOIN\s+\w+\s+ON\s+([\w\.]+)', sql_query, re.IGNORECASE):
+        col = match.group(1)
+        join_cols.add(col)
+    for match in re.finditer(r'ORDER BY\s+([\w\.]+)', sql_query, re.IGNORECASE):
+        col = match.group(1)
+        orderby_cols.add(col)
+    user_indexes = parse_user_indexes(indexes)
+    index_recs = {}
+    for col in where_cols | join_cols | orderby_cols:
+        # Only recommend for real columns in real tables (not aggregates/aliases)
+        if col and '.' in col:
+            alias, column = col.split('.', 1)
+            real_table = alias_to_table.get(alias, alias)
+            # Check if real_table is in tables
+            if real_table not in [t['name'] for t in tables]:
+                continue
+            # Skip aggregates/aliases
+            if re.match(r'\d+$', column) or column.lower() in ['count', 'sum', 'avg', 'min', 'max', 'order_count']:
+                continue
+            # SKIP if already indexed
+            if column.lower() in user_indexes.get(real_table.lower(), set()):
+                continue
+            rec_text = f"Consider creating an index on column '{column}' in table '{real_table}' for better performance."
+            ddl_text = f"CREATE INDEX idx_{real_table}_{column}_auto ON {real_table}({column});"
+            key = ('index', real_table, column)
+            if key not in index_recs:
+                index_recs[key] = {'text': rec_text, 'actionable': True, 'sub': [{'text': ddl_text, 'actionable': False}], 'key': key}
+            else:
+                if not any(sub['text'] == ddl_text for sub in index_recs[key]['sub']):
+                    index_recs[key]['sub'].append({'text': ddl_text, 'actionable': False})
+    return list(index_recs.values())
+
+def extract_fts_tables_from_explain(explain_plan, db_engine):
+    """
+    Extract all tables accessed via full table scan from the EXPLAIN plan using EXPLAIN_KEYWORDS.
+    Returns a set of table names.
+    Improved for Oracle: robustly extract table names from lines like 'TABLE ACCESS FULL USERS' and pipe-formatted plans.
+    """
+    from explain_keywords import EXPLAIN_KEYWORDS
+    fts_tables = set()
+    if not explain_plan:
+        return fts_tables
+    # Normalize line endings and strip whitespace
+    plan_lines = [l.strip() for l in explain_plan.strip().split('\n') if l.strip()]
+    keywords = EXPLAIN_KEYWORDS.get(db_engine, {})
+    scan_keywords = set(keywords.get('sequential', []) + keywords.get('table', []) + keywords.get('full_scan', []) + keywords.get('scan', []))
+    for line in plan_lines:
+        # Oracle pipe format: | 3 | TABLE ACCESS FULL | DEPARTMENTS | 27 | 3 (0) |
+        if db_engine == 'oracle' and '|' in line:
+            parts = [p.strip() for p in line.strip('|').split('|')]
+            if len(parts) >= 3:
+                op = parts[1].upper()
+                table = parts[2]
+                for kw in scan_keywords:
+                    if kw.upper() in op:
+                        if table and table.upper() not in {'', 'N/A', 'VW_SQ_1'}:
+                            fts_tables.add(table)
+        else:
+            for kw in scan_keywords:
+                if kw.lower() in line.lower():
+                    m = re.search(rf"{re.escape(kw)}[\s]+([\w\"\[\]]+)", line, re.IGNORECASE)
+                    if m:
+                        table = m.group(1).replace('"', '').replace('[', '').replace(']', '')
+                        fts_tables.add(table)
+                    else:
+                        parts = line.strip().split()
+                        if len(parts) > 0:
+                            table = parts[-1].replace('"', '').replace('[', '').replace(']', '')
+                            if table.upper() not in {'FULL', 'ACCESS', 'TABLE', 'SCAN', 'INDEX', 'HASH', 'JOIN', 'STATEMENT'}:
+                                fts_tables.add(table)
+    return fts_tables
+
+# In each analyze_* function, after parsing the EXPLAIN plan:
+# 1. Call extract_fts_tables_from_explain(explain_plan, db_engine)
+# 2. For each FTS table, if not already indexed, recommend an index on the best predicate column (from WHERE/JOIN), or recommend review if no predicate found.
+# 3. Ensure all FTS tables are covered in recommendations.
+
+def extract_explain_plan_metrics(explain_plan, db_engine):
+    """
+    Parse EXPLAIN plan for actual rows scanned, cost, memory/bytes, and estimated time for all engines.
+    Returns a dict: {rows_scanned, cost, memory, time}
+    """
+    metrics = {'rows_scanned': None, 'cost': None, 'memory': None, 'time': None}
+    if not explain_plan:
+        return metrics
+    plan_lines = explain_plan.strip().split('\n')
+    # Try CSV first if it looks like CSV
+    if any(',' in line for line in plan_lines[:3]):
+        try:
+            csv_reader = csv.DictReader(StringIO(explain_plan))
+            rows_list, cost_list, mem_list, time_list = [], [], [], []
+            for row in csv_reader:
+                for k, v in row.items():
+                    if v is None or v == '' or v == 'NULL':
+                        continue
+                    kl = k.lower()
+                    if 'row' in kl and v.isdigit():
+                        rows_list.append(int(v))
+                    if 'cost' in kl and v.replace('.', '', 1).isdigit():
+                        cost_list.append(float(v))
+                    if 'byte' in kl and v.isdigit():
+                        mem_list.append(int(v))
+                    if 'mem' in kl and v.replace('.', '', 1).isdigit():
+                        mem_list.append(float(v))
+                    if 'time' in kl and v.replace('.', '', 1).isdigit():
+                        time_list.append(float(v))
+            if rows_list:
+                metrics['rows_scanned'] = max(rows_list)
+            if cost_list:
+                metrics['cost'] = max(cost_list)
+            if mem_list:
+                metrics['memory'] = max(mem_list)
+            if time_list:
+                metrics['time'] = max(time_list)
+            return metrics
+        except Exception:
+            pass
+    # Text parsing by engine
+    if db_engine == 'postgresql':
+        # e.g. Seq Scan on users  (cost=0.00..431.00 rows=21000 width=4)
+        rows_list, cost_list, mem_list, time_list = [], [], [], []
+        for line in plan_lines:
+            m = re.search(r'rows=(\d+)', line)
+            if m:
+                rows_list.append(int(m.group(1)))
+            m = re.search(r'cost=([\d\.]+)\.\.([\d\.]+)', line)
+            if m:
+                cost_list.append(float(m.group(2)))
+            m = re.search(r'width=(\d+)', line)
+            if m:
+                mem_list.append(int(m.group(1)))
+        if rows_list:
+            metrics['rows_scanned'] = max(rows_list)
+        if cost_list:
+            metrics['cost'] = max(cost_list)
+        if mem_list:
+            metrics['memory'] = max(mem_list)
+    elif db_engine == 'mysql':
+        # e.g. | id | select_type | table | type | rows | Extra |
+        for line in plan_lines:
+            m = re.search(r'rows=?(\d+)', line)
+            if m:
+                metrics['rows_scanned'] = max(metrics['rows_scanned'] or 0, int(m.group(1))) if metrics['rows_scanned'] else int(m.group(1))
+            m = re.search(r'Using\s+filesort', line, re.IGNORECASE)
+            if m:
+                metrics['cost'] = (metrics['cost'] or 0) + 10
+        # MySQL EXPLAIN rarely gives memory/time directly
+    elif db_engine == 'oracle':
+        # Pipe/table or indented
+        for line in plan_lines:
+            m = re.search(r'rows=?(\d+)', line)
+            if m:
+                metrics['rows_scanned'] = max(metrics['rows_scanned'] or 0, int(m.group(1))) if metrics['rows_scanned'] else int(m.group(1))
+            m = re.search(r'cost=?(\d+)', line)
+            if m:
+                metrics['cost'] = max(metrics['cost'] or 0, int(m.group(1))) if metrics['cost'] else int(m.group(1))
+            m = re.search(r'bytes=?(\d+)', line)
+            if m:
+                metrics['memory'] = max(metrics['memory'] or 0, int(m.group(1))) if metrics['memory'] else int(m.group(1))
+    elif db_engine == 'sqlserver':
+        for line in plan_lines:
+            m = re.search(r'Estimated Rows=?(\d+)', line, re.IGNORECASE)
+            if m:
+                metrics['rows_scanned'] = max(metrics['rows_scanned'] or 0, int(m.group(1))) if metrics['rows_scanned'] else int(m.group(1))
+            m = re.search(r'Estimated Total Subtree Cost=([\d\.]+)', line, re.IGNORECASE)
+            if m:
+                metrics['cost'] = max(metrics['cost'] or 0, float(m.group(1))) if metrics['cost'] else float(m.group(1))
+            m = re.search(r'Memory Grant=([\d\.]+)', line, re.IGNORECASE)
+            if m:
+                metrics['memory'] = max(metrics['memory'] or 0, float(m.group(1))) if metrics['memory'] else float(m.group(1))
+    elif db_engine == 'sqlite':
+        for line in plan_lines:
+            m = re.search(r'rows=?(\d+)', line)
+            if m:
+                metrics['rows_scanned'] = max(metrics['rows_scanned'] or 0, int(m.group(1))) if metrics['rows_scanned'] else int(m.group(1))
+    return metrics
+
+def parse_user_indexes(indexes):
+    """
+    Parse user-provided index definitions and return {table: set(columns)} for fast lookup.
+    Supports multi-column indexes and different syntaxes for all engines.
+    """
+    table_to_indexed_cols = {}
+    for idx in indexes:
+        defn = idx.get('definition') or idx.get('ddl') or ''
+        # Try to extract table and columns from CREATE INDEX ... ON table(col1, col2, ...)
+        m = re.search(r'CREATE\s+INDEX\s+\w+\s+ON\s+([\w\"\[\]]+)\s*\(([^)]+)\)', defn, re.IGNORECASE)
+        if m:
+            table = m.group(1).replace('"', '').replace('[', '').replace(']', '').lower()
+            cols = [c.strip().lower() for c in m.group(2).split(',')]
+            table_to_indexed_cols.setdefault(table, set()).update(cols)
+            continue
+        # MySQL/SQL Server: CREATE INDEX ... ON table (col1, col2)
+        m = re.search(r'ON\s+([\w\"\[\]]+)\s*\(([^)]+)\)', defn, re.IGNORECASE)
+        if m:
+            table = m.group(1).replace('"', '').replace('[', '').replace(']', '').lower()
+            cols = [c.strip().lower() for c in m.group(2).split(',')]
+            table_to_indexed_cols.setdefault(table, set()).update(cols)
+            continue
+        # Oracle: CREATE INDEX ... ON "TABLE" ("COL1", ...)
+        m = re.search(r'ON\s+"?([\w]+)"?\s*\(([^)]+)\)', defn, re.IGNORECASE)
+        if m:
+            table = m.group(1).lower()
+            cols = [c.replace('"', '').strip().lower() for c in m.group(2).split(',')]
+            table_to_indexed_cols.setdefault(table, set()).update(cols)
+    return table_to_indexed_cols
+
+# Update recommend_indexes_for_fts_tables to use parse_user_indexes
+
+def recommend_indexes_for_fts_tables(sql_query, indexes, alias_to_table, tables, explain_plan, db_engine):
+    """
+    For every FTS table detected in the EXPLAIN plan, recommend an index on the best predicate column (from WHERE/JOIN/ORDER BY),
+    or a review if no predicate is found. If an index exists but FTS still occurs, recommend investigation steps.
+    Never recommend both a new index and investigation for the same table.
+    """
+    fts_tables = extract_fts_tables_from_explain(explain_plan, db_engine)
+    where_cols = set()
+    orderby_cols = set()
+    join_cols = set()
+    for match in re.finditer(r'WHERE\s+([\w\.]+)', sql_query, re.IGNORECASE):
+        col = match.group(1)
+        where_cols.add(col)
+    for match in re.finditer(r'JOIN\s+\w+\s+ON\s+([\w\.]+)', sql_query, re.IGNORECASE):
+        col = match.group(1)
+        join_cols.add(col)
+    for match in re.finditer(r'ORDER BY\s+([\w\.]+)', sql_query, re.IGNORECASE):
+        col = match.group(1)
+        orderby_cols.add(col)
+    user_indexes = parse_user_indexes(indexes)
+    recs = []
+    for fts_table in fts_tables:
+        fts_table_lc = fts_table.lower()
+        investigation_given = False
+        # Check if any relevant predicate column already has an index
+        for col in where_cols | join_cols | orderby_cols:
+            if col and '.' in col:
+                alias, column = col.split('.', 1)
+                real_table = alias_to_table.get(alias, alias).lower()
+                column_lc = column.lower()
+                if real_table == fts_table_lc:
+                    # Skip aggregates/aliases
+                    if re.match(r'\d+$', column_lc) or column_lc in ['count', 'sum', 'avg', 'min', 'max', 'order_count']:
+                        continue
+                    if column_lc in user_indexes.get(real_table, set()):
+                        # Only investigation advice, never a new index for this table
+                        rec_text = (f"Table '{fts_table}' is accessed via Full Table Scan even though an index exists on '{column}'. "
+                                    f"Consider running ANALYZE/UPDATE STATISTICS, checking for data skew or NULLs, or using a query hint to encourage index usage.")
+                        key = ('fts_index_exists', fts_table, column)
+                        recs.append({'text': rec_text, 'actionable': True, 'sub': [], 'key': key})
+                        investigation_given = True
+                        break
+        if not investigation_given:
+            # Only recommend a new index if no relevant predicate column has an index
+            best_col = None
+            for col in where_cols | join_cols | orderby_cols:
+                if col and '.' in col:
+                    alias, column = col.split('.', 1)
+                    real_table = alias_to_table.get(alias, alias).lower()
+                    column_lc = column.lower()
+                    if real_table == fts_table_lc:
+                        # Skip aggregates/aliases
+                        if re.match(r'\d+$', column_lc) or column_lc in ['count', 'sum', 'avg', 'min', 'max', 'order_count']:
+                            continue
+                        best_col = column
+                        break
+            if best_col:
+                rec_text = f"Consider creating an index on column '{best_col}' in table '{fts_table}' for better performance (Full Table Scan detected)."
+                ddl_text = f"CREATE INDEX idx_{fts_table}_{best_col}_auto ON {fts_table}({best_col});"
+                key = ('fts_index', fts_table, best_col)
+                recs.append({'text': rec_text, 'actionable': True, 'sub': [{'text': ddl_text, 'actionable': False}], 'key': key})
+            else:
+                rec_text = f"Table '{fts_table}' is accessed via Full Table Scan. Review for possible indexing or query rewrite."
+                key = ('fts_review', fts_table)
+                recs.append({'text': rec_text, 'actionable': True, 'sub': [], 'key': key})
+    return recs
+
+@app.errorhandler(CSRFError)
+def handle_csrf_error(e):
+    return render_template('csrf_error.html', reason=e.description), 400
+
+def detect_engine_from_explain(explain_plan):
+    """
+    Heuristically detect the likely DB engine from the EXPLAIN plan string.
+    Returns one of: 'oracle', 'mysql', 'postgresql', 'sqlserver', 'sqlite', or None.
+    """
+    if not explain_plan:
+        return None
+    plan = explain_plan.strip().lower()
+    # Oracle: pipe format, TABLE ACCESS FULL, COST (%CPU)
+    if 'table access full' in plan or 'cost (%cpu)' in plan or '| id  | operation' in plan:
+        return 'oracle'
+    # MySQL: id, select_type, table, type, rows, Extra
+    if 'select_type' in plan and 'rows' in plan and 'extra' in plan:
+        return 'mysql'
+    if '| id |' in plan and '| table |' in plan:
+        return 'mysql'
+    # PostgreSQL: Seq Scan, Index Scan, cost=, width=
+    if 'seq scan' in plan or 'index scan' in plan or 'cost=' in plan or 'width=' in plan:
+        return 'postgresql'
+    # SQL Server: Table Scan, Index Seek, Hash Match, Estimated Rows
+    if 'table scan' in plan or 'index seek' in plan or 'hash match' in plan or 'estimated rows' in plan:
+        return 'sqlserver'
+    # SQLite: SCAN TABLE, SEARCH TABLE
+    if 'scan table' in plan or 'search table' in plan:
+        return 'sqlite'
+    return None
+
+# Add engine mismatch detection to all analyze_* functions
+# Example for analyze_oracle:
+def analyze_oracle(sql_query, tables, indexes, explain_plan=None):
+    import re
+    import sqlparse
+    from explain_keywords import EXPLAIN_KEYWORDS
+    recommendations = []
+    warnings = []
+    optimized_query = None
+    summary = []
+    explain_mermaid = parse_explain_plan_to_mermaid(explain_plan, 'oracle')
+    alias_to_table = get_alias_to_table_mapping(sql_query)
+    # Engine mismatch detection
+    detected_engine = detect_engine_from_explain(explain_plan)
+    if detected_engine and detected_engine != 'oracle':
+        msg = f"It looks like your EXPLAIN plan is for {detected_engine.capitalize()}, but you selected Oracle. Please choose the correct database engine for accurate analysis."
+        warnings.append(msg)
+        summary.insert(0, msg)
+        recommendations.insert(0, {'text': msg, 'actionable': False, 'sub': [], 'key': ('engine_mismatch',)})
+        return {
+            'engine': 'Oracle',
+            'summary': summary,
+            'recommendations': recommendations,
+            'warnings': warnings,
+            'engine_mismatch': True
+        }
+    if re.search(r'SELECT\s+\*', sql_query, re.IGNORECASE):
+        recommendations.append({
+            'text': "Replace SELECT * with explicit column names for better performance and maintainability.",
+            'actionable': True, 'sub': [], 'key': ('query', 'select_star')
+        })
+        warnings.append("Avoid using SELECT *. Specify only the columns you need for better performance and maintainability.")
+        optimized_query = re.sub(r'SELECT\s+\*', 'SELECT <columns>', sql_query, flags=re.IGNORECASE)
+        summary.append("Query uses SELECT *; consider selecting only needed columns.")
+    # Improved JOIN/ON detection: only warn if a JOIN truly lacks an ON clause
+    join_pattern = re.compile(r'JOIN\s+([\w\.]+)?', re.IGNORECASE)
+    join_matches = list(join_pattern.finditer(sql_query))
+    on_pattern = re.compile(r'ON\s+[^\n]+', re.IGNORECASE)
+    if join_matches:
+        for i, jm in enumerate(join_matches):
+            join_start = jm.end()
+            join_end = join_matches[i+1].start() if i+1 < len(join_matches) else len(sql_query)
+            join_block = sql_query[join_start:join_end]
+            if not on_pattern.search(join_block):
+                table_name = jm.group(1) if jm.group(1) else None
+                if table_name:
+                    warn_msg = f"JOIN without ON clause for table {table_name}"
+                    if warn_msg not in warnings:
+                        warnings.append(warn_msg)
+                        summary.append(warn_msg)
+                        recommendations.append({'text': f"Add an ON clause to the JOIN for table {table_name} to avoid cartesian products and improve performance.", 'actionable': True, 'sub': [], 'key': ('join', table_name)})
+                else:
+                    warn_msg = "JOIN without ON clause detected"
+                    if warn_msg not in warnings:
+                        warnings.append(warn_msg)
+                        summary.append(warn_msg)
+                        recommendations.append({'text': "Add ON clauses to all JOINs to avoid cartesian products and improve performance.", 'actionable': True, 'sub': [], 'key': ('join', 'generic')})
+    if re.search(r'FROM\s*\(\s*SELECT', sql_query, re.IGNORECASE):
+        recommendations.append({
+            'text': "Consider rewriting subqueries in FROM clause as JOINs for better performance and readability.",
+            'actionable': True, 'sub': [], 'key': ('query', 'subquery_to_join')
+        })
+        summary.append("Query uses subquery in FROM clause.")
+    recommendations.extend(get_real_column_index_recommendations(sql_query, indexes, alias_to_table, tables))
+    # FTS table summary and recommendations
+    fts_tables = extract_fts_tables_from_explain(explain_plan, 'oracle') if explain_plan else set()
+    if fts_tables:
+        summary.append(f"Full Table Scan detected on: {', '.join(sorted(fts_tables))}")
+        for fts_table in fts_tables:
+            recommendations.append({'text': f"Table '{fts_table}' is accessed via Full Table Scan. Review for possible indexing or query rewrite.", 'actionable': True, 'sub': [], 'key': ('fts_review', fts_table)})
+    # Only show 'No indexes provided' if no actionable FTS/index recommendations exist
+    actionable_recs = [r for r in recommendations if r.get('actionable')]
+    if not indexes and not actionable_recs:
+        recommendations.append({'text': "No indexes provided. Consider adding indexes on columns used in WHERE, JOIN, and ORDER BY clauses.", 'actionable': False, 'sub': [], 'key': ('index', 'none', 'none')})
+    # Deduplicate recommendations
+    seen = set()
+    deduped_recs = []
+    for rec in recommendations:
+        key = rec['key'] if isinstance(rec, dict) and 'key' in rec else rec
+        if key not in seen:
+            deduped_recs.append(rec)
+            seen.add(key)
+    deduped_recs.sort(key=lambda r: not (isinstance(r, dict) and r.get('actionable')))
+    recommendations = deduped_recs
+    warnings = list(dict.fromkeys(warnings))
+    summary = list(dict.fromkeys(summary))
+    if not recommendations:
+        recommendations = [{'text': 'No actionable recommendations 🎉', 'actionable': False, 'sub': [], 'key': ('none',)}]
+    if not summary:
+        summary = ['No summary available for this query.']
+    actionable_keys_count = 0
+    if recommendations and isinstance(recommendations[0], dict):
+        actionable_keys = set(r['key'] for r in recommendations if r.get('actionable'))
+        actionable_keys_count = len(actionable_keys)
+    performance_score = calculate_performance_score(sql_query, tables, indexes, warnings, actionable_keys_count, explain_plan, db_engine='oracle')
+    performance_metrics = calculate_performance_metrics(sql_query, tables, indexes, 'oracle', explain_plan, [r for r in recommendations if r.get('actionable')])
+    # FTS index recommendations
+    fts_index_recs = recommend_indexes_for_fts_tables(sql_query, indexes, alias_to_table, tables, explain_plan, 'oracle')
+    for rec in fts_index_recs:
+        if rec['key'] not in [r['key'] for r in recommendations if isinstance(r, dict) and 'key' in r]:
+            recommendations.append(rec)
+    return {
+        'engine': 'Oracle',
+        'summary': summary,
+        'recommendations': recommendations,
+        'warnings': warnings,
+        'optimized_query': optimized_query,
+        'explain_mermaid': explain_mermaid,
+        'performance_score': performance_score,
+        'performance_metrics': performance_metrics
+    }
 
 if __name__ == '__main__':
     app.run(debug=True) 

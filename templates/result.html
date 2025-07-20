@@ -168,6 +168,25 @@
 </head>
 <body>
 <div class="container mt-5">
+    {% if report and report.engine_mismatch %}
+    <div class="d-flex justify-content-center align-items-center" style="min-height: 40vh;">
+        <div class="card shadow-lg border-danger" style="max-width: 600px; width: 100%;">
+            <div class="card-header bg-danger text-white d-flex align-items-center">
+                <i class="fas fa-exclamation-triangle fa-2x me-3"></i>
+                <span style="font-size: 1.25rem; font-weight: 600;">Engine Mismatch Detected</span>
+            </div>
+            <div class="card-body text-center">
+                <p class="mb-4" style="font-size: 1.1rem;">
+                    {{ report.summary[0] if report.summary and report.summary|length > 0 else 'The EXPLAIN plan does not match the selected database engine. Please correct your input for accurate analysis.' }}
+                </p>
+                <a href="/" class="btn btn-primary btn-lg mt-2" style="min-width: 200px;">
+                    <i class="fas fa-arrow-left me-2"></i>Back to Analyzer
+                </a>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+    {% if not report or not report.engine_mismatch %}
     <div class="d-flex justify-content-between align-items-center mb-3">
         <h1 class="mb-0">SQL Analysis Report</h1>
         <div class="d-flex align-items-center">
@@ -345,29 +364,62 @@
                 </div>
                 <div class="col-md-9">
                     <h5 class="mb-3">Performance Analysis</h5>
-                    
-                    {% if report.performance_score.bonuses %}
+
+                    {# Score calculation #}
+                    {% if report.performance_score.calculation %}
                     <div class="mb-3">
-                        <h6 class="text-success"><i class="fas fa-plus-circle me-1"></i>Strengths (+{{ report.performance_score.total_bonuses }} points)</h6>
-                        <ul class="list-unstyled">
-                            {% for bonus in report.performance_score.bonuses %}
-                            <li class="text-success"><i class="fas fa-check me-2"></i>{{ bonus }}</li>
-                            {% endfor %}
-                        </ul>
+                        <div class="alert alert-primary">
+                            <i class="fas fa-calculator me-2"></i>
+                            <strong>Score Calculation:</strong> {{ report.performance_score.calculation }}
+                        </div>
                     </div>
                     {% endif %}
-                    
-                    {% if report.performance_score.deductions %}
+
+                    {# Overall summary #}
+                    {% if report.performance_score.overall_summary %}
                     <div class="mb-3">
-                        <h6 class="text-danger"><i class="fas fa-minus-circle me-1"></i>Areas for Improvement (-{{ report.performance_score.total_deductions }} points)</h6>
-                        <ul class="list-unstyled">
-                            {% for deduction in report.performance_score.deductions %}
-                            <li class="text-danger"><i class="fas fa-exclamation-triangle me-2"></i>{{ deduction }}</li>
-                            {% endfor %}
-                        </ul>
+                        <div class="alert alert-info">
+                            <i class="fas fa-info-circle me-2"></i>
+                            <strong>Overall Summary:</strong> {{ report.performance_score.overall_summary }}
+                        </div>
                     </div>
                     {% endif %}
-                    
+
+                    {# Detailed breakdown #}
+                    {% if report.performance_score.breakdown and report.performance_score.breakdown|length > 0 %}
+                    <div class="mb-3">
+                        <h6 class="mb-2"><i class="fas fa-list-alt me-1"></i>Score Breakdown</h6>
+                        <div class="accordion" id="scoreBreakdownAccordion">
+                            {% for group in report.performance_score.breakdown %}
+                            <div class="accordion-item mb-2">
+                                <h2 class="accordion-header" id="heading{{ loop.index }}">
+                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse{{ loop.index }}" aria-expanded="false" aria-controls="collapse{{ loop.index }}">
+                                        <span class="fw-bold">{{ group.category }}</span>
+                                    </button>
+                                </h2>
+                                <div id="collapse{{ loop.index }}" class="accordion-collapse collapse" aria-labelledby="heading{{ loop.index }}" data-bs-parent="#scoreBreakdownAccordion">
+                                    <div class="accordion-body">
+                                        <ul class="list-unstyled mb-0">
+                                            {% for item in group['items'] %}
+                                            <li class="mb-2">
+                                                <span class="badge {% if item.type == 'deduction' %}bg-danger{% else %}bg-success{% endif %} me-2">
+                                                    {% if item.type == 'deduction' %}-{% else %}+{% endif %}{{ item.points }}
+                                                </span>
+                                                <span class="fw-semibold">{{ item.reason }}</span>
+                                                {% if item.context %}
+                                                    <span class="text-muted small ms-2">[{{ item.context }}]</span>
+                                                {% endif %}
+                                            </li>
+                                            {% endfor %}
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+
                     <div class="alert alert-info">
                         <i class="fas fa-info-circle me-2"></i>
                         <strong>Score Breakdown:</strong> This score is based on query structure, indexing strategy, table sizes, and best practices. 
@@ -392,19 +444,35 @@
                     <div class="metrics-grid">
                         <div class="metric-item">
                             <span class="metric-label">Estimated Time:</span>
-                            <span class="metric-value">{{ report.performance_metrics.estimated_execution_time }}</span>
+                            <span class="metric-value">
+                                {{ report.performance_metrics.estimated_execution_time.value }}
+                                <small class="text-muted">({{ report.performance_metrics.estimated_execution_time.source }})</small>
+                            </span>
                         </div>
                         <div class="metric-item">
                             <span class="metric-label">Memory Usage:</span>
-                            <span class="metric-value">{{ report.performance_metrics.estimated_memory_usage }}</span>
+                            <span class="metric-value">
+                                {{ report.performance_metrics.estimated_memory_usage.value }}
+                                <small class="text-muted">({{ report.performance_metrics.estimated_memory_usage.source }})</small>
+                            </span>
                         </div>
                         <div class="metric-item">
                             <span class="metric-label">Rows Scanned:</span>
-                            <span class="metric-value">{{ "{:,}".format(report.performance_metrics.estimated_rows_scanned) }}</span>
+                            <span class="metric-value">
+                                {% if report.performance_metrics.estimated_rows_scanned.value != 'Unknown' %}
+                                    {{ "{:,}".format(report.performance_metrics.estimated_rows_scanned.value) }}
+                                {% else %}
+                                    {{ report.performance_metrics.estimated_rows_scanned.value }}
+                                {% endif %}
+                                <small class="text-muted">({{ report.performance_metrics.estimated_rows_scanned.source }})</small>
+                            </span>
                         </div>
                         <div class="metric-item">
-                            <span class="metric-label">Resource Intensity:</span>
-                            <span class="metric-value badge bg-{{ 'danger' if report.performance_metrics.resource_intensity == 'Very High' else 'warning' if report.performance_metrics.resource_intensity == 'High' else 'info' if report.performance_metrics.resource_intensity == 'Medium' else 'success' }}">{{ report.performance_metrics.resource_intensity }}</span>
+                            <span class="metric-label">Cost:</span>
+                            <span class="metric-value">
+                                {{ report.performance_metrics.cost.value }}
+                                <small class="text-muted">({{ report.performance_metrics.cost.source }})</small>
+                            </span>
                         </div>
                     </div>
                 </div>
@@ -482,14 +550,14 @@
         <div class="card mb-3">
             <div class="section-header">Summary</div>
             <div class="card-body">
-                {% if report.summary is sequence and not report.summary is string %}
+                {% if report.summary is sequence and not report.summary is string and report.summary|length > 0 %}
                 <ul>
                 {% for item in report.summary %}
                     <li>{{ item }}</li>
                 {% endfor %}
                 </ul>
                 {% else %}
-                <p>{{ report.summary }}</p>
+                <p>{{ report.summary[0] if report.summary is sequence and not report.summary is string and report.summary|length == 1 else report.summary or 'No summary available for this query.' }}</p>
                 {% endif %}
             </div>
         </div>
@@ -525,15 +593,46 @@
             </div>
         </div>
         {% endif %}
-        {% if report.recommendations %}
+        {% if report.recommendations and report.recommendations|length > 0 and (report.recommendations[0].text != 'No actionable recommendations 🎉' or report.recommendations|length > 1) %}
         <div class="card mb-3">
             <div class="section-header">Recommendations</div>
             <div class="card-body">
+                {% set actionable_count = report.actionable_count if report.actionable_count is defined else report.recommendations|selectattr('actionable')|list|length %}
+                <div class="mb-2">
+                    {% if actionable_count == 0 %}
+                        <span class="text-success">No actionable recommendations 🎉</span>
+                    {% elif actionable_count == 1 %}
+                        <span class="text-warning">1 actionable recommendation</span>
+                    {% elif actionable_count == 2 %}
+                        <span class="text-warning">2 actionable recommendations</span>
+                    {% else %}
+                        <span class="text-info">Refer to the recommendation section for more details.</span>
+                    {% endif %}
+                </div>
                 <ul>
-                {% for rec in report.recommendations %}
-                    <li>{{ rec }}</li>
+                {% for rec in report.recommendations if rec.text and rec.text != 'No actionable recommendations 🎉' %}
+                    <li>
+                        {% if rec.actionable %}
+                            <span class="badge bg-warning text-dark me-1">Actionable</span>
+                        {% endif %}
+                        {{ rec.text }}
+                        {% if rec.sub and rec.sub|length > 0 %}
+                            <ul class="ms-4">
+                                {% for subrec in rec.sub %}
+                                    <li>{{ subrec.text }}</li>
+                                {% endfor %}
+                            </ul>
+                        {% endif %}
+                    </li>
                 {% endfor %}
                 </ul>
+            </div>
+        </div>
+        {% elif report.recommendations and report.recommendations|length == 1 and report.recommendations[0].text == 'No actionable recommendations 🎉' %}
+        <div class="card mb-3">
+            <div class="section-header">Recommendations</div>
+            <div class="card-body">
+                <span class="text-success">No actionable recommendations 🎉</span>
             </div>
         </div>
         {% endif %}
@@ -570,7 +669,99 @@
     {% endif %}
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.0/dist/mermaid.min.js"></script>
-    <script>if(window.mermaid){mermaid.initialize({startOnLoad:true});}</script>
+    <script>
+        if(window.mermaid){
+            mermaid.initialize({
+                startOnLoad: true,
+                theme: 'default',
+                flowchart: {
+                    useMaxWidth: true,
+                    htmlLabels: true,
+                    curve: 'basis'
+                }
+            });
+        }
+    </script>
+    
+    <style>
+        /* Mermaid diagram styling */
+        .mermaid {
+            text-align: center;
+            margin: 1rem 0;
+        }
+        
+        /* Node styling for different operation types */
+        .seq-scan {
+            fill: #fecaca !important;
+            stroke: #dc2626 !important;
+        }
+        
+        .index-scan {
+            fill: #dbeafe !important;
+            stroke: #2563eb !important;
+        }
+        
+        .join {
+            fill: #fef3c7 !important;
+            stroke: #d97706 !important;
+        }
+        
+        .aggregate {
+            fill: #d1fae5 !important;
+            stroke: #059669 !important;
+        }
+        
+        .filter {
+            fill: #f3e8ff !important;
+            stroke: #7c3aed !important;
+        }
+        
+        .result {
+            fill: #fef2f2 !important;
+            stroke: #dc2626 !important;
+        }
+        
+        .default {
+            fill: #f3f4f6 !important;
+            stroke: #6b7280 !important;
+        }
+        
+        /* Dark mode support */
+        [data-theme="dark"] .seq-scan {
+            fill: #7f1d1d !important;
+            stroke: #fca5a5 !important;
+        }
+        
+        [data-theme="dark"] .index-scan {
+            fill: #1e3a8a !important;
+            stroke: #93c5fd !important;
+        }
+        
+        [data-theme="dark"] .join {
+            fill: #92400e !important;
+            stroke: #fcd34d !important;
+        }
+        
+        [data-theme="dark"] .aggregate {
+            fill: #064e3b !important;
+            stroke: #6ee7b7 !important;
+        }
+        
+        [data-theme="dark"] .filter {
+            fill: #581c87 !important;
+            stroke: #c4b5fd !important;
+        }
+        
+        [data-theme="dark"] .result {
+            fill: #7f1d1d !important;
+            stroke: #fca5a5 !important;
+        }
+        
+        [data-theme="dark"] .default {
+            fill: #374151 !important;
+            stroke: #9ca3af !important;
+        }
+    </style>
     
     <!-- Pass data to JavaScript -->
     <script>
@@ -922,5 +1113,6 @@
 <a href="/" id="sticky-back-btn" class="btn btn-primary btn-lg" aria-label="Back to SQL Input" title="Back to SQL Input">
     <i class="fas fa-arrow-left me-2"></i>Back to Analyzer
 </a>
+{% endif %}
 </body>
 </html> 

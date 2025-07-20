@@ -354,6 +354,14 @@ function handleExplainCSVUpload(event) {
                     }
                 }
                 document.getElementById('explain_plan_textarea').value = explainText;
+                
+                // Show success message
+                const feedback = document.getElementById('explain_plan_feedback');
+                if (feedback) {
+                    feedback.innerHTML = `<i class="fas fa-check text-success me-1"></i>EXPLAIN plan CSV loaded successfully! The visualization will be generated when you analyze the query.`;
+                    feedback.style.color = '#22c55e';
+                    feedback.setAttribute('aria-live', 'polite');
+                }
             },
             error: function(err) {
                 alert('Error parsing Explain Plan CSV: ' + err.message);
@@ -489,7 +497,7 @@ function generateExplainSection(engine, sqlQuery) {
         sql = '-- Provide your explain plan as CSV';
         columns = [];
     }
-    return {title: 'EXPLAIN Plan', sql, columns};
+    return {title: 'EXPLAIN Plan (with Visualization)', sql, columns};
 }
 
 function generatePKSection(engine, tables) {
@@ -545,6 +553,11 @@ function makeCollapsible(title, sql, columns, idx = 0) {
     const headingId = id + '-heading';
     const collapseId = id + '-collapse';
     const showClass = idx === 0 ? 'show' : '';
+    
+    // Add special note for EXPLAIN plan visualization
+    const visualizationNote = title.includes('EXPLAIN Plan') ? 
+        '<div class="alert alert-info mt-2"><i class="fas fa-chart-line me-1"></i><strong>Visualization Feature:</strong> When you upload this CSV and analyze your query, you\'ll get a beautiful flowchart visualization of your execution plan!</div>' : '';
+    
     return `
       <div class="accordion-item">
         <h2 class="accordion-header" id="${headingId}">
@@ -557,8 +570,399 @@ function makeCollapsible(title, sql, columns, idx = 0) {
             <strong>SQL to run:</strong>
             <pre class="bg-light p-2">${sql}</pre>
             ${columns.length ? `<strong>Expected CSV columns:</strong><ul>${columns.map(c => `<li><code>${c}</code></li>`).join('')}</ul>` : ''}
+            ${visualizationNote}
           </div>
         </div>
       </div>
     `;
+}
+
+// EXPLAIN Plan Visualization Functions
+function generateExplainVisualization() {
+    const explainText = document.getElementById('explain_plan_textarea').value.trim();
+    const dbEngine = document.getElementById('db_engine_select').value;
+    
+    if (!explainText) {
+        alert('Please provide an EXPLAIN plan first. You can upload a CSV file or paste the EXPLAIN output text.');
+        return;
+    }
+    
+    // Show loading state
+    const container = document.getElementById('explain_visualization_container');
+    const output = document.getElementById('explain_visualization_output');
+    container.style.display = 'block';
+    output.innerHTML = '<div class="text-center"><i class="fas fa-spinner fa-spin fa-2x"></i><p class="mt-2">Generating visualization...</p></div>';
+    
+    // Send to backend for processing
+    fetch('/generate_explain_visualization', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': document.querySelector('input[name="csrf_token"]').value
+        },
+        body: JSON.stringify({
+            explain_plan: explainText,
+            db_engine: dbEngine
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // Store the Mermaid code globally for copy functionality
+            window.currentMermaidCode = data.mermaid_code;
+            
+            // Ensure Mermaid is loaded and initialized
+            ensureMermaidLoaded(() => {
+                renderVisualization(data.mermaid_code);
+            });
+        } else {
+            output.innerHTML = `<div class="alert alert-danger"><i class="fas fa-exclamation-triangle me-2"></i>Error: ${data.error}</div>`;
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        output.innerHTML = `<div class="alert alert-danger"><i class="fas fa-exclamation-triangle me-2"></i>Error generating visualization. Please try again.</div>`;
+    });
+}
+
+function ensureMermaidLoaded(callback) {
+    if (typeof mermaid !== 'undefined' && mermaid.initialize) {
+        // Mermaid is already loaded, just initialize and callback
+        mermaid.initialize({
+            startOnLoad: false,
+            theme: 'default',
+            flowchart: {
+                useMaxWidth: false,
+                htmlLabels: true
+            }
+        });
+        callback();
+    } else {
+        // Load Mermaid dynamically
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/mermaid@8.14.0/dist/mermaid.min.js?v=' + Date.now();
+        script.onload = () => {
+            mermaid.initialize({
+                startOnLoad: false,
+                theme: 'default',
+                flowchart: {
+                    useMaxWidth: false,
+                    htmlLabels: true
+                }
+            });
+            callback();
+        };
+        script.onerror = () => {
+            console.error('Failed to load Mermaid.js');
+            document.getElementById('explain_visualization_output').innerHTML = 
+                '<div class="alert alert-danger"><i class="fas fa-exclamation-triangle me-2"></i>Failed to load visualization library. Please refresh the page and try again.</div>';
+        };
+        document.head.appendChild(script);
+    }
+}
+
+function renderVisualization(mermaidCode) {
+    const output = document.getElementById('explain_visualization_output');
+    
+    if (!output) {
+        console.error('explain_visualization_output container not found');
+        return;
+    }
+    
+    // Create a unique ID for the diagram
+    const diagramId = 'explain-diagram-' + Date.now();
+    console.log('Generated diagram ID:', diagramId);
+    
+    // Clear the output and create a new container
+    output.innerHTML = '';
+    
+    // Create the diagram container
+    const diagramContainer = document.createElement('div');
+    diagramContainer.id = diagramId;
+    diagramContainer.className = 'mermaid';
+    output.appendChild(diagramContainer);
+    
+    console.log('Diagram container created successfully');
+    
+    // Store reference to the container
+    let containerRef = diagramContainer;
+    
+    // Use a more reliable rendering approach
+    try {
+        console.log('Calling mermaid.render...');
+        
+        // Try the promise-based approach first
+        if (typeof mermaid.render === 'function') {
+            const renderResult = mermaid.render(diagramId, mermaidCode);
+            
+            if (renderResult && typeof renderResult.then === 'function') {
+                // Promise-based API
+                console.log('Using Promise API');
+                renderResult.then(({svg}) => {
+                    console.log('Promise resolved, setting SVG...');
+                    // Use stored reference instead of searching by ID
+                    if (containerRef && containerRef.parentNode) {
+                        containerRef.innerHTML = svg;
+                        console.log('SVG set successfully');
+                    } else {
+                        console.error('Container reference lost');
+                        showFallbackUI(mermaidCode, output);
+                    }
+                }).catch(error => {
+                    console.error('Mermaid rendering error:', error);
+                    // Try direct SVG creation as final fallback
+                    try {
+                        const tempDiv = document.createElement('div');
+                        tempDiv.innerHTML = `<svg width="100%" height="400" xmlns="http://www.w3.org/2000/svg">
+                            <text x="10" y="30" font-family="Arial" font-size="14" fill="red">Rendering failed: ${error.message}</text>
+                            <text x="10" y="60" font-family="Arial" font-size="12" fill="blue">Please use Mermaid Live Editor</text>
+                        </svg>`;
+                        const svgElement = tempDiv.firstElementChild;
+                        if (svgElement) {
+                            output.appendChild(svgElement);
+                            console.log('Error SVG created and appended');
+                        } else {
+                            showFallbackUI(mermaidCode, output);
+                        }
+                    } catch (finalError) {
+                        console.error('Final fallback failed:', finalError);
+                        showFallbackUI(mermaidCode, output);
+                    }
+                });
+            } else if (renderResult && renderResult.svg) {
+                // Synchronous API with SVG
+                console.log('Using Synchronous API with SVG');
+                if (containerRef && containerRef.parentNode) {
+                    containerRef.innerHTML = renderResult.svg;
+                    console.log('SVG set successfully');
+                } else {
+                    console.error('Container reference lost');
+                    showFallbackUI(mermaidCode, output);
+                }
+            } else {
+                // Fallback: try to render directly
+                console.log('Using fallback rendering approach');
+                try {
+                    mermaid.parse(mermaidCode);
+                    const svg = mermaid.render(diagramId, mermaidCode);
+                    
+                    // Use stored reference immediately
+                    if (containerRef && containerRef.parentNode) {
+                        containerRef.innerHTML = svg;
+                        console.log('Fallback SVG set successfully');
+                    } else {
+                        console.error('Container reference lost in fallback');
+                        // Try to create SVG element directly
+                        try {
+                            const tempDiv = document.createElement('div');
+                            tempDiv.innerHTML = svg;
+                            const svgElement = tempDiv.firstElementChild;
+                            if (svgElement) {
+                                output.appendChild(svgElement);
+                                console.log('SVG element created and appended directly');
+                            } else {
+                                throw new Error('No SVG element found');
+                            }
+                        } catch (directError) {
+                            console.error('Direct SVG creation failed:', directError);
+                            showFallbackUI(mermaidCode, output);
+                        }
+                    }
+                } catch (fallbackError) {
+                    console.error('Fallback rendering failed:', fallbackError);
+                    showFallbackUI(mermaidCode, output);
+                }
+            }
+        } else {
+            throw new Error('mermaid.render is not available');
+        }
+    } catch (error) {
+        console.error('Error in renderVisualization:', error);
+        showFallbackUI(mermaidCode, output);
+    }
+}
+
+function showFallbackUI(mermaidCode, container) {
+    container.innerHTML = `
+        <div class="alert alert-info">
+            <h6><i class="fas fa-info-circle me-2"></i>Visualization Preview</h6>
+            <p>The diagram couldn't be rendered automatically, but here's the Mermaid code:</p>
+            <pre class="bg-light p-3 rounded">${mermaidCode}</pre>
+            <p class="mb-0"><small>You can copy this code and paste it into <a href="https://mermaid.live" target="_blank">Mermaid Live Editor</a> to view the diagram.</small></p>
+        </div>
+    `;
+}
+
+function downloadVisualization() {
+    const svg = document.querySelector('#explain_visualization_output svg');
+    if (!svg) {
+        alert('No visualization to download. Please generate one first.');
+        return;
+    }
+    
+    try {
+        // Get SVG dimensions
+        const svgRect = svg.getBoundingClientRect();
+        const width = svgRect.width || 800;
+        const height = svgRect.height || 600;
+        
+        // Create canvas with proper dimensions
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = width;
+        canvas.height = height;
+        
+        // Set white background
+        ctx.fillStyle = 'white';
+        ctx.fillRect(0, 0, width, height);
+        
+        // Convert SVG to data URL
+        const svgData = new XMLSerializer().serializeToString(svg);
+        const svgBlob = new Blob([svgData], {type: 'image/svg+xml;charset=utf-8'});
+        const url = URL.createObjectURL(svgBlob);
+        
+        const img = new Image();
+        
+        img.onload = function() {
+            try {
+                // Draw the image on canvas
+                ctx.drawImage(img, 0, 0, width, height);
+                
+                // Convert to blob and download
+                canvas.toBlob(function(blob) {
+                    if (blob) {
+                        const downloadUrl = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = downloadUrl;
+                        a.download = 'explain_plan_visualization.png';
+                        a.style.display = 'none';
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(downloadUrl);
+                        console.log('PNG download successful');
+                    } else {
+                        throw new Error('Failed to create blob');
+                    }
+                }, 'image/png', 0.95);
+                
+                URL.revokeObjectURL(url);
+            } catch (error) {
+                console.error('Canvas error:', error);
+                downloadAsSVG(svgData);
+            }
+        };
+        
+        img.onerror = function() {
+            console.error('Image load error, falling back to SVG');
+            downloadAsSVG(svgData);
+            URL.revokeObjectURL(url);
+        };
+        
+        img.src = url;
+        
+    } catch (error) {
+        console.error('Download error:', error);
+        // Final fallback: try to download as SVG
+        try {
+            const svgData = new XMLSerializer().serializeToString(svg);
+            downloadAsSVG(svgData);
+        } catch (finalError) {
+            console.error('Final fallback failed:', finalError);
+            alert('Download failed. Please try again or use the copy function.');
+        }
+    }
+}
+
+function downloadAsSVG(svgData) {
+    try {
+        const blob = new Blob([svgData], {type: 'image/svg+xml'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'explain_plan_visualization.svg';
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        console.log('SVG download successful');
+    } catch (error) {
+        console.error('SVG download failed:', error);
+        alert('Download failed. Please try again or use the copy function.');
+    }
+}
+
+function copyVisualizationCode() {
+    // Try to get the Mermaid code from the current visualization
+    let mermaidCode = '';
+    
+    // First, try to get from the stored code (if available)
+    if (window.currentMermaidCode) {
+        mermaidCode = window.currentMermaidCode;
+    } else {
+        // Try to get from the mermaid element
+        const mermaidElement = document.querySelector('#explain_visualization_output .mermaid');
+        if (mermaidElement) {
+            mermaidCode = mermaidElement.getAttribute('data-mermaid') || mermaidElement.textContent;
+        }
+    }
+    
+    if (!mermaidCode) {
+        alert('No visualization code to copy. Please generate one first.');
+        return;
+    }
+    
+    // Try to copy to clipboard
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(mermaidCode).then(() => {
+            showCopySuccess();
+        }).catch(err => {
+            console.error('Failed to copy: ', err);
+            fallbackCopy(mermaidCode);
+        });
+    } else {
+        fallbackCopy(mermaidCode);
+    }
+}
+
+function showCopySuccess() {
+    // Find the copy button and show success message
+    const copyButton = document.querySelector('button[onclick="copyVisualizationCode()"]');
+    if (copyButton) {
+        const originalText = copyButton.innerHTML;
+        copyButton.innerHTML = '<i class="fas fa-check me-1"></i>Copied!';
+        copyButton.classList.remove('btn-outline-secondary');
+        copyButton.classList.add('btn-success');
+        
+        setTimeout(() => {
+            copyButton.innerHTML = originalText;
+            copyButton.classList.remove('btn-success');
+            copyButton.classList.add('btn-outline-secondary');
+        }, 2000);
+    } else {
+        alert('Mermaid code copied to clipboard!');
+    }
+}
+
+function fallbackCopy(text) {
+    // Fallback copy method
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-999999px';
+    textArea.style.top = '-999999px';
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    
+    try {
+        document.execCommand('copy');
+        showCopySuccess();
+    } catch (err) {
+        console.error('Fallback copy failed: ', err);
+        alert('Failed to copy to clipboard. Please select and copy manually:\n\n' + text);
+    }
+    
+    document.body.removeChild(textArea);
 }

@@ -285,6 +285,63 @@ textarea{
     50% { background-position: 100% 50%; }
 }
 
+.visualization-highlight {
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    border: 1px solid #6366f1;
+}
+
+.visualization-highlight::before {
+    background: linear-gradient(90deg, #6366f1, #8b5cf6, #a855f7, #c084fc);
+    animation: indigo-rainbow 4s ease-in-out infinite;
+}
+
+@keyframes indigo-rainbow {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+}
+
+/* Mermaid diagram styling for visualization */
+.mermaid {
+    text-align: center;
+    margin: 1rem 0;
+}
+
+/* Node styling for different operation types */
+.seq-scan {
+    fill: #fecaca !important;
+    stroke: #dc2626 !important;
+}
+
+.index-scan {
+    fill: #dbeafe !important;
+    stroke: #2563eb !important;
+}
+
+.join {
+    fill: #fef3c7 !important;
+    stroke: #d97706 !important;
+}
+
+.aggregate {
+    fill: #d1fae5 !important;
+    stroke: #059669 !important;
+}
+
+.filter {
+    fill: #f3e8ff !important;
+    stroke: #7c3aed !important;
+}
+
+.result {
+    fill: #fef2f2 !important;
+    stroke: #dc2626 !important;
+}
+
+.default {
+    fill: #f3f4f6 !important;
+    stroke: #6b7280 !important;
+}
+
 /* Responsive adjustments for section highlights */
 @media (max-width: 768px) {
     .did-you-know-header {
