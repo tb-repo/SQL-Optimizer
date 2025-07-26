@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>D3.js Visualization Test</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 20px;
+            background: #f8fafc;
+        }
+        
+        .test-container {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            border: 2px solid #cbd5e1;
+        }
+        
+        /* Additional D3.js text positioning improvements */
+        .node text {
+            pointer-events: none; /* Prevent text from interfering with node interactions */
+            white-space: nowrap; /* Prevent text wrapping */
+            overflow: hidden; /* Hide overflow text */
+            text-overflow: ellipsis; /* Show ellipsis for long text */
+            max-width: 200px; /* Limit text width */
+        }
+
+        .node .operation-label {
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            text-shadow: 0 1px 3px rgba(255,255,255,0.9), 0 0 1px rgba(0,0,0,0.1);
+            /* Ensure text doesn't overlap with nodes */
+            transform: translateZ(0); /* Force hardware acceleration */
+        }
+
+        .node .metrics {
+            font-weight: 500;
+            text-shadow: 0 1px 2px rgba(255,255,255,0.8);
+            line-height: 1.4;
+            /* Add more spacing between metrics */
+            word-spacing: 2px;
+        }
+
+        .node .performance-indicators {
+            font-weight: 700;
+            text-shadow: 0 1px 2px rgba(255,255,255,0.8);
+            letter-spacing: 0.5px;
+            /* Ensure indicators are clearly separated */
+            word-spacing: 4px;
+        }
+
+        /* Force text positioning to prevent overlap */
+        .node text[text-anchor="end"] {
+            transform: translateX(-5px); /* Add extra padding for right-aligned text */
+        }
+
+        .node text[text-anchor="start"] {
+            transform: translateX(5px); /* Add extra padding for left-aligned text */
+        }
+
+        /* Ensure proper vertical alignment */
+        .node text[dominant-baseline="middle"] {
+            alignment-baseline: middle;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-container">
+        <h2>D3.js Visualization Test - Text Overlap Fix</h2>
+        <p>This test demonstrates the improved text positioning to prevent overlap.</p>
+        <div id="visualization"></div>
+    </div>
+
+    <script>
+        // Test data that would cause overlap
+        const testData = {
+            operation: "Query Execution Plan",
+            cost: 0,
+            rows: 0,
+            time: 0,
+            children: [
+                {
+                    operation: "Hash Join",
+                    cost: 1234.56,
+                    rows: 1000,
+                    time: 45.67,
+                    children: [
+                        {
+                            operation: "Parallel Seq Scan on Users",
+                            cost: 500.00,
+                            rows: 5000,
+                            time: 20.00
+                        },
+                        {
+                            operation: "Parallel Hash Join",
+                            cost: 734.56,
+                            rows: 1000,
+                            time: 25.67,
+                            children: [
+                                {
+                                    operation: "Hash Join",
+                                    cost: 400.00,
+                                    rows: 800,
+                                    time: 15.00
+                                },
+                                {
+                                    operation: "Parallel Seq Scan on Income Statement",
+                                    cost: 300.00,
+                                    rows: 600,
+                                    time: 12.00
+                                },
+                                {
+                                    operation: "Parallel Seq Scan on Company",
+                                    cost: 250.00,
+                                    rows: 500,
+                                    time: 10.00
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        };
+
+        function renderTestVisualization(treeData, container) {
+            // Set dimensions with more generous spacing
+            const margin = {top: 30, right: 150, bottom: 50, left: 150};
+            const width = 800 - margin.right - margin.left;
+            const height = 600 - margin.top - margin.bottom;
+
+            // Clear container
+            container.innerHTML = '';
+
+            // Create SVG
+            const svg = d3.select(container).append("svg")
+                .attr("width", width + margin.right + margin.left)
+                .attr("height", height + margin.top + margin.bottom)
+                .append("g")
+                .attr("transform", `translate(${margin.left},${margin.top})`);
+
+            // Use the tree data
+            const root = d3.hierarchy(treeData, d => d.children);
+            
+            // Calculate performance metrics
+            let maxCost = 0;
+            root.each(d => {
+                if (d.data.cost > maxCost) maxCost = d.data.cost;
+            });
+            
+            // Color scale
+            const colorScale = d3.scaleLinear()
+                .domain([0, maxCost])
+                .range(["#10b981", "#f59e0b", "#ef4444"]);
+
+            // Tree layout with increased separation
+            const tree = d3.tree().size([width, height]).separation((a, b) => {
+                return (a.parent === b.parent ? 1.5 : 2);
+            });
+
+            const treeData2 = tree(root);
+            const nodes = treeData2.descendants();
+            const links = treeData2.links();
+
+            // Links
+            svg.selectAll(".link")
+                .data(links)
+                .enter().append("path")
+                .attr("class", "link")
+                .attr("d", d3.linkVertical()
+                    .x(d => d.x)
+                    .y(d => d.y))
+                .style("fill", "none")
+                .style("stroke", "#3b82f6")
+                .style("stroke-width", 2.5)
+                .style("stroke-opacity", 0.8);
+
+            // Nodes
+            const node = svg.selectAll(".node")
+                .data(nodes)
+                .enter().append("g")
+                .attr("class", "node")
+                .attr("transform", d => `translate(${d.x},${d.y})`);
+
+            // Circles
+            node.append("circle")
+                .attr("r", 20)
+                .style("fill", d => colorScale(d.data.cost))
+                .style("stroke", "#ffffff")
+                .style("stroke-width", 2.5)
+                .style("filter", "drop-shadow(0 2px 4px rgba(0,0,0,0.1))");
+
+            // Function to calculate optimal text position
+            function calculateTextPosition(d, textType) {
+                const baseOffset = 28;
+                const verticalSpacing = {
+                    'operation': 0,
+                    'metrics': 2.5,
+                    'indicators': 4.2
+                };
+                
+                let xOffset = baseOffset;
+                let yOffset = verticalSpacing[textType] || 0;
+                
+                const hasChildren = d.children && d.children.length > 0;
+                const isLeftSide = hasChildren;
+                
+                if (isLeftSide) {
+                    xOffset = -xOffset;
+                }
+                
+                return {
+                    x: xOffset,
+                    y: yOffset,
+                    anchor: isLeftSide ? "end" : "start"
+                };
+            }
+
+            // Operation labels
+            node.append("text")
+                .attr("class", "operation-label")
+                .attr("dy", d => calculateTextPosition(d, 'operation').y + "em")
+                .attr("x", d => calculateTextPosition(d, 'operation').x)
+                .style("text-anchor", d => calculateTextPosition(d, 'operation').anchor)
+                .text(d => d.data.operation)
+                .style("font-size", "13px")
+                .style("font-weight", "600")
+                .style("fill", "#1f2937")
+                .style("text-shadow", "0 1px 2px rgba(255,255,255,0.8)")
+                .style("letter-spacing", "0.5px")
+                .style("dominant-baseline", "middle");
+
+            // Metrics
+            node.append("text")
+                .attr("class", "metrics")
+                .attr("dy", d => calculateTextPosition(d, 'metrics').y + "em")
+                .attr("x", d => calculateTextPosition(d, 'metrics').x)
+                .style("text-anchor", d => calculateTextPosition(d, 'metrics').anchor)
+                .text(d => {
+                    let metrics = [];
+                    if (d.data.cost > 0) metrics.push(`Cost: ${d.data.cost.toFixed(2)}`);
+                    if (d.data.rows > 0) metrics.push(`Rows: ${d.data.rows.toLocaleString()}`);
+                    if (d.data.time > 0) metrics.push(`Time: ${d.data.time.toFixed(2)}ms`);
+                    return metrics.join(" | ");
+                })
+                .style("font-size", "11px")
+                .style("fill", "#6b7280")
+                .style("font-weight", "500")
+                .style("text-shadow", "0 1px 2px rgba(255,255,255,0.8)")
+                .style("dominant-baseline", "middle");
+        }
+
+        // Initialize the test visualization
+        renderTestVisualization(testData, document.getElementById('visualization'));
+    </script>
+</body>
+</html> 

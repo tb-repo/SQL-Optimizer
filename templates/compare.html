@@ -1,0 +1,1032 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Query Comparison - SQL Performance Assistant</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --bs-primary: #2563eb;
+            --bs-primary-rgb: 37, 99, 235;
+            --modern-info: #0ea5e9;
+            --modern-success: #22c55e;
+            --modern-warning: #facc15;
+            --modern-danger: #ef4444;
+            --modern-muted: #6c757d;
+            --modern-bg: #f8f9fa;
+            
+            /* Light mode colors */
+            --bg-primary: #f8fafc;
+            --bg-secondary: #ffffff;
+            --text-primary: #1f2937;
+            --text-secondary: #6b7280;
+            --border-color: #e5e7eb;
+            --card-bg: #ffffff;
+            --input-bg: #ffffff;
+            --input-border: #d1d5db;
+            --highlight-bg: linear-gradient(135deg, #e0e7ff 0%, #f8fafc 100%);
+        }
+        
+        [data-theme="dark"] {
+            --bg-primary: #111827;
+            --bg-secondary: #1f2937;
+            --text-primary: #f9fafb;
+            --text-secondary: #d1d5db;
+            --border-color: #374151;
+            --card-bg: #1f2937;
+            --input-bg: #374151;
+            --input-border: #4b5563;
+            --highlight-bg: linear-gradient(135deg, #1e3a8a 0%, #111827 100%);
+        }
+        
+        body {
+            background: var(--highlight-bg);
+            min-height: 100vh;
+            color: var(--text-primary);
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+        
+        .card {
+            border-radius: 0.5rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            transition: background-color 0.3s ease, border-color 0.3s ease;
+        }
+        
+        .form-control, .form-select {
+            background-color: var(--input-bg);
+            border-color: var(--input-border);
+            color: var(--text-primary);
+            transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+        }
+        
+        .form-control:focus, .form-select:focus {
+            background-color: var(--input-bg);
+            border-color: var(--bs-primary);
+            color: var(--text-primary);
+            box-shadow: 0 0 0 0.2rem rgba(var(--bs-primary-rgb), 0.25);
+        }
+        
+        .form-control::placeholder {
+            color: var(--text-secondary);
+        }
+        
+        .alert {
+            background-color: var(--card-bg);
+            border-color: var(--border-color);
+            color: var(--text-primary);
+            transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+        }
+        
+        .query-input {
+            border: 2px solid var(--input-border);
+            border-radius: 0.5rem;
+            transition: border-color 0.3s ease;
+        }
+        
+        .query-input:focus {
+            border-color: var(--bs-primary);
+            box-shadow: 0 0 0 0.2rem rgba(var(--bs-primary-rgb), 0.25);
+        }
+        
+        .comparison-card {
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        
+        .comparison-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        
+        .metric-badge {
+            font-size: 0.85rem;
+            padding: 0.4rem 0.8rem;
+        }
+        
+        .ranking-item {
+            background: var(--card-bg);
+            border-radius: 0.5rem;
+            padding: 1rem;
+            margin-bottom: 0.5rem;
+            border-left: 4px solid var(--bs-primary);
+            border: 1px solid var(--border-color);
+        }
+        
+        .ranking-item:nth-child(1) { border-left-color: var(--modern-success); }
+        .ranking-item:nth-child(2) { border-left-color: var(--bs-primary); }
+        .ranking-item:nth-child(3) { border-left-color: var(--modern-warning); }
+        .ranking-item:nth-child(4) { border-left-color: #fd7e14; }
+        .ranking-item:nth-child(5) { border-left-color: var(--modern-danger); }
+        
+        .query-preview {
+            font-family: 'Courier New', monospace;
+            background-color: var(--input-bg);
+            padding: 0.5rem;
+            border-radius: 0.25rem;
+            font-size: 0.9rem;
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+        
+        .insight-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+        }
+        
+        .recommendation-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+        }
+        
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin: 1rem 0;
+        }
+        
+        .add-query-btn {
+            background: var(--modern-success);
+            border: none;
+            border-radius: 0.5rem;
+            padding: 0.75rem 1.5rem;
+            color: white;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        
+        .add-query-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(34, 197, 94, 0.3);
+            background: #16a34a;
+            color: white;
+        }
+        
+        .remove-query-btn {
+            background: var(--modern-danger);
+            border: none;
+            border-radius: 0.5rem;
+            padding: 0.5rem 1rem;
+            color: white;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        
+        .remove-query-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3);
+            background: #dc2626;
+            color: white;
+        }
+        
+        .section-header {
+            background: var(--bs-primary);
+            color: #fff;
+            border-radius: 0.5rem 0.5rem 0 0;
+            padding: 0.75rem 1rem;
+            font-size: 1.1rem;
+            font-weight: 500;
+        }
+        
+        pre {
+            background-color: var(--input-bg);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+        }
+        
+        .badge {
+            font-size: 0.75rem;
+        }
+    </style>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+<div class="container mt-5">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1 class="mb-0">
+            <i class="fas fa-balance-scale text-primary me-2"></i>
+            Query Comparison
+        </h1>
+        <div class="d-flex align-items-center">
+            <button id="dark-mode-toggle" class="btn btn-outline-secondary btn-sm me-2" title="Toggle Dark Mode">
+                <i class="fas fa-moon" id="dark-mode-icon"></i>
+            </button>
+            <a href="/" class="btn btn-outline-primary btn-sm me-2" title="Main Analysis">
+                <i class="fas fa-home me-1"></i>Home
+            </a>
+            <a href="/analytics" class="btn btn-outline-warning btn-sm me-2" title="Analytics Dashboard">
+                <i class="fas fa-chart-bar me-1"></i>Analytics
+            </a>
+            <a href="/help" class="btn btn-outline-info btn-sm">
+                <i class="fas fa-question-circle me-1"></i>Help Guide
+            </a>
+        </div>
+    </div>
+    
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <p class="text-muted mb-0">Compare multiple SQL queries side-by-side for performance analysis and optimization insights</p>
+                </div>
+                <div class="text-end">
+                    <span class="badge bg-primary fs-6">Advanced Feature</span>
+                    <button class="btn btn-outline-info btn-sm ms-2" data-bs-toggle="modal" data-bs-target="#termsModal">
+                        <i class="fas fa-info-circle me-1"></i>Terms Guide
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+        <!-- Query Input Form -->
+        <div class="card comparison-card mb-4">
+            <div class="section-header">
+                <h5 class="mb-0">
+                    <i class="fas fa-edit me-2"></i>
+                    Enter Queries to Compare
+                </h5>
+            </div>
+            <div class="card-body">
+                <form method="POST" id="comparison-form">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                    
+                    <div id="query-inputs">
+                        <!-- Query 1 -->
+                        <div class="row mb-3 query-row" data-query-id="1">
+                            <div class="col-md-8">
+                                <label class="form-label fw-bold">
+                                    <i class="fas fa-code me-1"></i>Query 1
+                                </label>
+                                <textarea class="form-control query-input" name="query_1" rows="4" 
+                                          placeholder="SELECT id, name FROM users WHERE status = 'active';" required></textarea>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label fw-bold">
+                                    <i class="fas fa-database me-1"></i>Database Engine
+                                </label>
+                                <select class="form-select" name="db_engine_1">
+                                    <option value="mysql">MySQL</option>
+                                    <option value="postgresql" selected>PostgreSQL</option>
+                                    <option value="sqlserver">SQL Server</option>
+                                    <option value="oracle">Oracle</option>
+                                    <option value="sqlite">SQLite</option>
+                                </select>
+                            </div>
+                            <div class="col-md-1 d-flex align-items-end">
+                                <button type="button" class="btn remove-query-btn" onclick="removeQuery(1)" style="display: none;">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Query 2 -->
+                        <div class="row mb-3 query-row" data-query-id="2">
+                            <div class="col-md-8">
+                                <label class="form-label fw-bold">
+                                    <i class="fas fa-code me-1"></i>Query 2
+                                </label>
+                                <textarea class="form-control query-input" name="query_2" rows="4" 
+                                          placeholder="SELECT u.id, u.name FROM users u INNER JOIN profiles p ON u.id = p.user_id WHERE u.status = 'active';" required></textarea>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label fw-bold">
+                                    <i class="fas fa-database me-1"></i>Database Engine
+                                </label>
+                                <select class="form-select" name="db_engine_2">
+                                    <option value="mysql">MySQL</option>
+                                    <option value="postgresql" selected>PostgreSQL</option>
+                                    <option value="sqlserver">SQL Server</option>
+                                    <option value="oracle">Oracle</option>
+                                    <option value="sqlite">SQLite</option>
+                                </select>
+                            </div>
+                            <div class="col-md-1 d-flex align-items-end">
+                                <button type="button" class="btn remove-query-btn" onclick="removeQuery(2)" style="display: none;">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Add More Queries Button -->
+                    <div class="text-center mb-3">
+                        <button type="button" class="btn add-query-btn" onclick="addQuery()">
+                            <i class="fas fa-plus me-2"></i>Add Another Query
+                        </button>
+                    </div>
+
+                    <!-- Submit Button -->
+                    <div class="text-center">
+                        <button type="submit" class="btn btn-primary btn-lg">
+                            <i class="fas fa-balance-scale me-2"></i>Compare Queries
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        {% if comparison_results %}
+        <!-- Comparison Results -->
+        <div class="row">
+            <!-- Performance Rankings -->
+            <div class="col-lg-6 mb-4">
+                <div class="card comparison-card h-100">
+                    <div class="card-header bg-success text-white">
+                        <h5 class="mb-0">
+                            <i class="fas fa-trophy me-2"></i>Performance Rankings
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        {% if comparison_metrics.performance_ranking %}
+                            {% for query in comparison_metrics.performance_ranking %}
+                            <div class="ranking-item">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <span class="badge bg-success fs-6 me-2">#{{ loop.index }}</span>
+                                        <strong>Query {{ query.index }}</strong>
+                                    </div>
+                                    <div class="text-end">
+                                        <div class="metric-badge bg-light text-dark" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                             title="Relative execution time compared to baseline. Lower is better. 1.0x = baseline performance.">
+                                            {{ "%.2f"|format(query.execution_time) }}x execution
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="query-preview mt-2">{{ query.query }}</div>
+                                <div class="mt-2">
+                                    <span class="badge bg-info metric-badge" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                         title="Query complexity score (0-100). Higher = more complex. Based on joins, subqueries, aggregations, etc.">
+                                        Complexity: {{ "%.1f"|format(query.complexity_score) }}
+                                    </span>
+                                    <span class="badge bg-warning metric-badge" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                         title="Estimated memory usage percentage. Higher = more memory required.">
+                                        Memory: {{ "%.1f"|format(query.memory_usage) }}%
+                                    </span>
+                                    <span class="badge bg-secondary metric-badge" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                         title="Estimated CPU usage percentage. Higher = more CPU intensive.">
+                                        CPU: {{ "%.1f"|format(query.cpu_usage) }}%
+                                    </span>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        {% else %}
+                            <p class="text-muted">No performance data available</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Complexity Rankings -->
+            <div class="col-lg-6 mb-4">
+                <div class="card comparison-card h-100">
+                    <div class="card-header bg-info text-white">
+                        <h5 class="mb-0">
+                            <i class="fas fa-puzzle-piece me-2"></i>Complexity Rankings
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        {% if comparison_metrics.complexity_ranking %}
+                            {% for query in comparison_metrics.complexity_ranking %}
+                            <div class="ranking-item">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <span class="badge bg-info fs-6 me-2">#{{ loop.index }}</span>
+                                        <strong>Query {{ query.index }}</strong>
+                                    </div>
+                                    <div class="text-end">
+                                        <div class="metric-badge bg-light text-dark">
+                                            {{ "%.1f"|format(query.complexity_score) }} complexity
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="query-preview mt-2">{{ query.query }}</div>
+                                <div class="mt-2">
+                                    <span class="badge bg-{{ 'success' if query.grade == 'A' else 'warning' if query.grade == 'B' else 'danger' }} metric-badge">
+                                        Grade: {{ query.grade }}
+                                    </span>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        {% else %}
+                            <p class="text-muted">No complexity data available</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Key Differences and Recommendations -->
+        <div class="row">
+            <!-- Key Differences -->
+            <div class="col-lg-6 mb-4">
+                <div class="card insight-card h-100">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="mb-0">
+                            <i class="fas fa-lightbulb me-2"></i>Key Differences
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        {% if comparison_metrics.key_differences %}
+                            <ul class="list-unstyled">
+                                {% for difference in comparison_metrics.key_differences %}
+                                <li class="mb-2">
+                                    <i class="fas fa-arrow-right text-primary me-2"></i>
+                                    {{ difference }}
+                                </li>
+                                {% endfor %}
+                            </ul>
+                        {% else %}
+                            <p class="text-muted">No significant differences detected</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recommendations -->
+            <div class="col-lg-6 mb-4">
+                <div class="card recommendation-card h-100">
+                    <div class="card-header bg-warning text-dark">
+                        <h5 class="mb-0">
+                            <i class="fas fa-cogs me-2"></i>Optimization Recommendations
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        {% if comparison_metrics.recommendations %}
+                            <ul class="list-unstyled">
+                                {% for recommendation in comparison_metrics.recommendations %}
+                                <li class="mb-3">
+                                    <i class="fas fa-check-circle text-success me-2"></i>
+                                    {{ recommendation }}
+                                    
+                                    {% if 'Analyze feature' in recommendation or 'detailed analysis' in recommendation %}
+                                    <div class="mt-2">
+                                        <button class="btn btn-sm btn-outline-primary" onclick="runAnalysisForQueries()">
+                                            <i class="fas fa-search me-1"></i>Run Detailed Analysis
+                                        </button>
+                                    </div>
+                                    {% endif %}
+                                </li>
+                                {% endfor %}
+                            </ul>
+                        {% else %}
+                            <p class="text-muted">All queries are well-optimized</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Detailed Comparison Charts -->
+        <div class="row">
+            <div class="col-12 mb-4">
+                <div class="card comparison-card">
+                    <div class="card-header bg-dark text-white">
+                        <h5 class="mb-0">
+                            <i class="fas fa-chart-bar me-2"></i>Performance Comparison Chart
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="chart-container">
+                            <canvas id="comparisonChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Individual Query Analysis -->
+        <div class="row">
+            {% for result in comparison_results %}
+            <div class="col-lg-6 mb-4">
+                <div class="card comparison-card h-100">
+                    <div class="card-header bg-secondary text-white">
+                        <h5 class="mb-0">
+                            <i class="fas fa-search me-2"></i>Query {{ result.index }} Analysis
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <strong>Query:</strong>
+                            <div class="query-preview mt-1">{{ result.query }}</div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <strong>Database Engine:</strong>
+                            <span class="badge bg-primary">{{ result.db_engine|upper }}</span>
+                        </div>
+
+                        {% if result.analysis.performance_metrics %}
+                        <div class="row">
+                            <div class="col-6">
+                                <div class="text-center p-2 bg-light rounded" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                     title="Relative execution time. 1.0x = baseline, lower = faster, higher = slower">
+                                    <div class="h4 text-primary mb-0">{{ "%.1f"|format(result.analysis.performance_metrics.execution_time) }}x</div>
+                                    <small class="text-muted">Execution Time</small>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="text-center p-2 bg-light rounded" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                     title="Query complexity (0-100). Higher = more complex, based on joins, subqueries, etc.">
+                                    <div class="h4 text-info mb-0">{{ "%.1f"|format(result.analysis.performance_metrics.complexity_score) }}</div>
+                                    <small class="text-muted">Complexity Score</small>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="row mt-2">
+                            <div class="col-6">
+                                <div class="text-center p-2 bg-light rounded" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                     title="Estimated performance improvement possible through optimization (0-100%)">
+                                    <div class="h4 text-warning mb-0">{{ "%.1f"|format(result.analysis.performance_metrics.optimization_potential) }}%</div>
+                                    <small class="text-muted">Optimization Potential</small>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="text-center p-2 bg-light rounded" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                     title="Estimated memory usage percentage. Higher = more memory required">
+                                    <div class="h4 text-success mb-0">{{ "%.1f"|format(result.analysis.performance_metrics.memory_usage) }}%</div>
+                                    <small class="text-muted">Memory Usage</small>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Individual Analyze Button -->
+                        <div class="text-center mt-3">
+                            <button class="btn btn-primary btn-sm" onclick="runAnalysisForQuery({{ result.index }})" 
+                                    data-bs-toggle="tooltip" data-bs-placement="top" 
+                                    title="Run detailed analysis for this specific query">
+                                <i class="fas fa-search me-1"></i>Analyze Query {{ result.index }}
+                            </button>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let queryCount = {{ comparison_results|length if comparison_results else 2 }};
+
+        // Initialize tooltips and dark mode
+        document.addEventListener('DOMContentLoaded', function() {
+            var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+            tooltipTriggerList.forEach(function(el) {
+                new bootstrap.Tooltip(el);
+            });
+            
+            // Dark mode functionality
+            initializeDarkMode();
+        });
+
+        function initializeDarkMode() {
+            const darkModeToggle = document.getElementById('dark-mode-toggle');
+            const darkModeIcon = document.getElementById('dark-mode-icon');
+            
+            // Check for saved theme preference or default to light mode
+            const currentTheme = localStorage.getItem('theme') || 'light';
+            document.documentElement.setAttribute('data-theme', currentTheme);
+            updateDarkModeIcon(currentTheme);
+            
+            // Add click event listener
+            darkModeToggle.addEventListener('click', function() {
+                const currentTheme = document.documentElement.getAttribute('data-theme');
+                const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+                
+                // Update theme
+                document.documentElement.setAttribute('data-theme', newTheme);
+                localStorage.setItem('theme', newTheme);
+                updateDarkModeIcon(newTheme);
+                
+                // Announce theme change for accessibility
+                const announcement = document.createElement('div');
+                announcement.setAttribute('aria-live', 'polite');
+                announcement.setAttribute('aria-label', `Switched to ${newTheme} mode`);
+                announcement.style.position = 'absolute';
+                announcement.style.left = '-10000px';
+                announcement.style.width = '1px';
+                announcement.style.height = '1px';
+                announcement.style.overflow = 'hidden';
+                document.body.appendChild(announcement);
+                setTimeout(() => document.body.removeChild(announcement), 1000);
+            });
+        }
+
+        function updateDarkModeIcon(theme) {
+            const darkModeIcon = document.getElementById('dark-mode-icon');
+            const darkModeToggle = document.getElementById('dark-mode-toggle');
+            
+            if (theme === 'dark') {
+                darkModeIcon.className = 'fas fa-sun';
+                darkModeToggle.title = 'Switch to Light Mode';
+                darkModeToggle.classList.remove('btn-outline-secondary');
+                darkModeToggle.classList.add('btn-outline-warning');
+            } else {
+                darkModeIcon.className = 'fas fa-moon';
+                darkModeToggle.title = 'Switch to Dark Mode';
+                darkModeToggle.classList.remove('btn-outline-warning');
+                darkModeToggle.classList.add('btn-outline-secondary');
+            }
+        }
+
+        function addQuery() {
+            if (queryCount >= 5) {
+                alert('Maximum 5 queries allowed for comparison');
+                return;
+            }
+            
+            queryCount++;
+            const queryInputs = document.getElementById('query-inputs');
+            const newQuery = document.createElement('div');
+            newQuery.className = 'row mb-3 query-row';
+            newQuery.setAttribute('data-query-id', queryCount);
+            
+            newQuery.innerHTML = `
+                <div class="col-md-8">
+                    <label class="form-label fw-bold">
+                        <i class="fas fa-code me-1"></i>Query ${queryCount}
+                    </label>
+                    <textarea class="form-control query-input" name="query_${queryCount}" rows="4" 
+                              placeholder="Enter your SQL query here..." required></textarea>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label fw-bold">
+                        <i class="fas fa-database me-1"></i>Database Engine
+                    </label>
+                    <select class="form-select" name="db_engine_${queryCount}">
+                        <option value="mysql">MySQL</option>
+                        <option value="postgresql" selected>PostgreSQL</option>
+                        <option value="sqlserver">SQL Server</option>
+                        <option value="oracle">Oracle</option>
+                        <option value="sqlite">SQLite</option>
+                    </select>
+                </div>
+                <div class="col-md-1 d-flex align-items-end">
+                    <button type="button" class="btn remove-query-btn" onclick="removeQuery(${queryCount})">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
+            `;
+            
+            queryInputs.appendChild(newQuery);
+            
+            // Show remove buttons for all queries except the first two
+            if (queryCount > 2) {
+                document.querySelectorAll('.remove-query-btn').forEach(btn => {
+                    btn.style.display = 'block';
+                });
+            }
+        }
+
+        function removeQuery(queryId) {
+            const queryRow = document.querySelector(`[data-query-id="${queryId}"]`);
+            if (queryRow) {
+                queryRow.remove();
+                queryCount--;
+                
+                // Hide remove buttons if we're back to 2 queries
+                if (queryCount <= 2) {
+                    document.querySelectorAll('.remove-query-btn').forEach(btn => {
+                        btn.style.display = 'none';
+                    });
+                }
+            }
+        }
+
+        {% if comparison_results and comparison_metrics %}
+        // Initialize comparison chart
+        document.addEventListener('DOMContentLoaded', function() {
+            const ctx = document.getElementById('comparisonChart').getContext('2d');
+            
+            const data = {
+                labels: [
+                    {% for query in comparison_metrics.performance_ranking %}
+                    'Query {{ query.index }}'{% if not loop.last %},{% endif %}
+                    {% endfor %}
+                ],
+                datasets: [{
+                    label: 'Execution Time (relative)',
+                    data: [
+                        {% for query in comparison_metrics.performance_ranking %}
+                        {{ query.execution_time }}{% if not loop.last %},{% endif %}
+                        {% endfor %}
+                    ],
+                    backgroundColor: 'rgba(13, 110, 253, 0.6)',
+                    borderColor: 'rgba(13, 110, 253, 1)',
+                    borderWidth: 2
+                }, {
+                    label: 'Complexity Score',
+                    data: [
+                        {% for query in comparison_metrics.performance_ranking %}
+                        {{ query.complexity_score }}{% if not loop.last %},{% endif %}
+                        {% endfor %}
+                    ],
+                    backgroundColor: 'rgba(220, 53, 69, 0.6)',
+                    borderColor: 'rgba(220, 53, 69, 1)',
+                    borderWidth: 2
+                }, {
+                    label: 'Optimization Potential (%)',
+                    data: [
+                        {% for query in comparison_metrics.performance_ranking %}
+                        {{ query.optimization_potential }}{% if not loop.last %},{% endif %}
+                        {% endfor %}
+                    ],
+                    backgroundColor: 'rgba(255, 193, 7, 0.6)',
+                    borderColor: 'rgba(255, 193, 7, 1)',
+                    borderWidth: 2
+                }]
+            };
+            
+            new Chart(ctx, {
+                type: 'bar',
+                data: data,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Score/Percentage'
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Queries'
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                        },
+                        title: {
+                            display: true,
+                            text: 'Query Performance Comparison'
+                        }
+                    }
+                }
+            });
+        });
+        {% endif %}
+    </script>
+
+    <!-- Terms Explanation Modal -->
+    <div class="modal fade" id="termsModal" tabindex="-1" aria-labelledby="termsModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title" id="termsModalLabel">
+                        <i class="fas fa-book me-2"></i>Query Comparison Terms Guide
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <h6 class="text-primary mb-3">
+                                <i class="fas fa-tachometer-alt me-2"></i>Performance Metrics
+                            </h6>
+                            
+                            <div class="mb-3">
+                                <strong class="text-success">Execution Time (1.0x)</strong>
+                                <p class="small text-muted mb-1">
+                                    Relative execution time compared to a baseline query. 
+                                    <strong>1.0x</strong> = baseline performance. 
+                                    <strong>2.0x</strong> = twice as slow. 
+                                    <strong>0.5x</strong> = twice as fast.
+                                </p>
+                                <div class="alert alert-info small">
+                                    <i class="fas fa-info-circle me-1"></i>
+                                    <strong>Example:</strong> If Query A shows 1.5x and Query B shows 0.8x, 
+                                    Query B is faster than Query A.
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <strong class="text-info">Complexity Score (0-100)</strong>
+                                <p class="small text-muted mb-1">
+                                    Measures how complex a query is based on:
+                                </p>
+                                <ul class="small text-muted">
+                                    <li>Number of JOINs</li>
+                                    <li>Subqueries and CTEs</li>
+                                    <li>Aggregations (GROUP BY, HAVING)</li>
+                                    <li>Window functions</li>
+                                    <li>JSON operations</li>
+                                </ul>
+                                <div class="alert alert-warning small">
+                                    <i class="fas fa-exclamation-triangle me-1"></i>
+                                    <strong>Higher complexity</strong> doesn't always mean worse performance, 
+                                    but it often indicates more resource usage.
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <strong class="text-warning">Memory Usage (%)</strong>
+                                <p class="small text-muted mb-1">
+                                    Estimated percentage of available memory the query will use. 
+                                    Based on table sizes, join complexity, and sorting operations.
+                                </p>
+                                <div class="alert alert-info small">
+                                    <i class="fas fa-memory me-1"></i>
+                                    <strong>High memory usage</strong> can cause performance issues 
+                                    if it exceeds available RAM.
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <strong class="text-secondary">CPU Usage (%)</strong>
+                                <p class="small text-muted mb-1">
+                                    Estimated percentage of CPU resources the query will consume. 
+                                    Based on computational complexity, sorting, and data processing.
+                                </p>
+                                <div class="alert alert-info small">
+                                    <i class="fas fa-microchip me-1"></i>
+                                    <strong>High CPU usage</strong> can slow down other operations 
+                                    running on the same server.
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="col-md-6">
+                            <h6 class="text-primary mb-3">
+                                <i class="fas fa-star me-2"></i>Grades & Rankings
+                            </h6>
+
+                            <div class="mb-3">
+                                <strong class="text-success">Complexity Grade (A-F)</strong>
+                                <p class="small text-muted mb-1">
+                                    Letter grade based on complexity score:
+                                </p>
+                                <ul class="small text-muted">
+                                    <li><strong>A (0-25):</strong> Simple queries, excellent performance</li>
+                                    <li><strong>B (26-50):</strong> Moderate complexity, good performance</li>
+                                    <li><strong>C (51-75):</strong> Complex queries, acceptable performance</li>
+                                    <li><strong>D (76-90):</strong> Very complex, may need optimization</li>
+                                    <li><strong>F (91-100):</strong> Extremely complex, optimization required</li>
+                                </ul>
+                            </div>
+
+                            <div class="mb-3">
+                                <strong class="text-warning">Optimization Potential (%)</strong>
+                                <p class="small text-muted mb-1">
+                                    Estimated percentage of performance improvement possible through optimization.
+                                </p>
+                                <ul class="small text-muted">
+                                    <li><strong>0-25%:</strong> Well-optimized query</li>
+                                    <li><strong>26-50%:</strong> Minor improvements possible - run detailed analysis</li>
+                                    <li><strong>51-75%:</strong> Significant optimization opportunities - use Analyze feature</li>
+                                    <li><strong>76-100%:</strong> Major optimization needed - comprehensive analysis recommended</li>
+                                </ul>
+                                <div class="alert alert-info small">
+                                    <i class="fas fa-info-circle me-1"></i>
+                                    <strong>Tip:</strong> For queries with >25% optimization potential, use our detailed Analyze feature for specific recommendations.
+                                </div>
+                            </div>
+
+                            <h6 class="text-primary mb-3">
+                                <i class="fas fa-chart-line me-2"></i>Rankings & Comparisons
+                            </h6>
+
+                            <div class="mb-3">
+                                <strong class="text-info">Performance Ranking</strong>
+                                <p class="small text-muted mb-1">
+                                    Queries ranked by execution time (fastest first). 
+                                    <strong>#1</strong> = fastest query, <strong>#5</strong> = slowest query.
+                                </p>
+                            </div>
+
+                            <div class="mb-3">
+                                <strong class="text-info">Complexity Ranking</strong>
+                                <p class="small text-muted mb-1">
+                                    Queries ranked by complexity score (simplest first). 
+                                    <strong>#1</strong> = simplest query, <strong>#5</strong> = most complex query.
+                                </p>
+                            </div>
+
+                            <div class="mb-3">
+                                <strong class="text-warning">Key Differences</strong>
+                                <p class="small text-muted mb-1">
+                                    Highlights the most significant performance gaps between queries, 
+                                    helping you understand which optimizations will have the biggest impact.
+                                </p>
+                            </div>
+
+                            <div class="mb-3">
+                                <strong class="text-success">Recommendations</strong>
+                                <p class="small text-muted mb-1">
+                                    Specific, actionable suggestions for improving query performance 
+                                    based on the comparison analysis.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row mt-4">
+                        <div class="col-12">
+                            <div class="alert alert-info">
+                                <h6 class="alert-heading">
+                                    <i class="fas fa-lightbulb me-2"></i>How to Use This Information
+                                </h6>
+                                <ul class="mb-0 small">
+                                    <li><strong>Compare execution times</strong> to identify the fastest approach</li>
+                                    <li><strong>Check complexity grades</strong> to understand query maintainability</li>
+                                    <li><strong>Review optimization potential</strong> to prioritize improvements</li>
+                                    <li><strong>Consider resource usage</strong> for production environment planning</li>
+                                    <li><strong>Follow recommendations</strong> for specific optimization steps</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    <a href="/help" class="btn btn-primary">
+                        <i class="fas fa-question-circle me-1"></i>Full Help Guide
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize tooltips
+        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'))
+        var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+            return new bootstrap.Tooltip(tooltipTriggerEl)
+        })
+
+        // Function to run detailed analysis for queries
+        function runAnalysisForQueries() {
+            // Get all queries from the comparison results
+            const queries = [];
+            {% if comparison_results %}
+                {% for result in comparison_results %}
+                queries.push({
+                    query: `{{ result.query|replace('\n', ' ')|replace('"', '\\"') }}`,
+                    db_engine: '{{ result.db_engine }}',
+                    index: {{ result.index }}
+                });
+                {% endfor %}
+            {% endif %}
+            
+            if (queries.length > 0) {
+                // Store queries in sessionStorage for auto-population
+                sessionStorage.setItem('compare_queries', JSON.stringify(queries));
+                sessionStorage.setItem('compare_source', 'comparison');
+                
+                // Show which queries will be available for analysis
+                let message = "Queries copied to analysis page!\n\n";
+                queries.forEach(q => {
+                    message += `Query ${q.index} (${q.db_engine.toUpperCase()}):\n${q.query}\n\n`;
+                });
+                message += "You can now:\n1. Select any query from the dropdown\n2. Add table DDL and index information\n3. Run detailed analysis";
+                
+                alert(message);
+                
+                // Redirect to main analysis page
+                window.location.href = '/?from_compare=true';
+            }
+        }
+
+        // Function to run analysis for a specific query
+        function runAnalysisForQuery(queryIndex) {
+            const queries = [];
+            {% if comparison_results %}
+                {% for result in comparison_results %}
+                queries.push({
+                    query: `{{ result.query|replace('\n', ' ')|replace('"', '\\"') }}`,
+                    db_engine: '{{ result.db_engine }}',
+                    index: {{ result.index }}
+                });
+                {% endfor %}
+            {% endif %}
+            
+            const selectedQuery = queries.find(q => q.index == queryIndex);
+            if (selectedQuery) {
+                // Store the specific query for auto-population
+                sessionStorage.setItem('compare_queries', JSON.stringify([selectedQuery]));
+                sessionStorage.setItem('compare_source', 'comparison');
+                sessionStorage.setItem('selected_query_index', queryIndex);
+                
+                // Redirect to main analysis page
+                window.location.href = '/?from_compare=true&query=' + queryIndex;
+            }
+        }
+    </script>
+</body>
+</html> 

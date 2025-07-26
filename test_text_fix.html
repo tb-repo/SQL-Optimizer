@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Text Truncation Fix Test</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 20px;
+            background: #f8fafc;
+        }
+        
+        .test-container {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            border: 2px solid #cbd5e1;
+        }
+        
+        /* Test the CSS fixes */
+        .node text {
+            pointer-events: none;
+            white-space: normal;
+            max-width: none;
+            overflow: visible;
+        }
+
+        .node .operation-label {
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            text-shadow: 0 1px 3px rgba(255,255,255,0.9), 0 0 1px rgba(0,0,0,0.1);
+            transform: translateZ(0);
+            white-space: normal;
+            max-width: none;
+            overflow: visible;
+        }
+
+        .node .metrics {
+            font-weight: 500;
+            text-shadow: 0 1px 2px rgba(255,255,255,0.8);
+            line-height: 1.4;
+            word-spacing: 2px;
+            white-space: normal;
+            max-width: none;
+            overflow: visible;
+            display: block !important;
+        }
+
+        .node .performance-indicators {
+            font-weight: 700;
+            text-shadow: 0 1px 2px rgba(255,255,255,0.8);
+            letter-spacing: 0.5px;
+            word-spacing: 4px;
+            white-space: normal;
+            max-width: none;
+            overflow: visible;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-container">
+        <h2>Text Truncation Fix Test</h2>
+        <p>This test verifies that text is no longer truncated and metrics are fully displayed.</p>
+        <div id="visualization"></div>
+    </div>
+
+    <script>
+        // Test data with long operation names and metrics
+        const testData = {
+            operation: "Query Execution Plan",
+            cost: 0,
+            rows: 0,
+            time: 0,
+            children: [
+                {
+                    operation: "Bitmap Heap Scan On Line Items List With Very Long Name That Should Not Be Truncated",
+                    cost: 1234.56,
+                    rows: 5000,
+                    time: 45.67,
+                    children: [
+                        {
+                            operation: "Filter: Created At Between 2023-01-01 AND 2023-12-31 With Very Long Filter Condition",
+                            cost: 500.00,
+                            rows: 2500,
+                            time: 20.00
+                        }
+                    ]
+                },
+                {
+                    operation: "Hash Join With Very Long Join Condition That Should Be Fully Visible",
+                    cost: 734.56,
+                    rows: 1000,
+                    time: 25.67,
+                    children: [
+                        {
+                            operation: "Parallel Seq Scan On Income Statement Table With Very Long Table Name",
+                            cost: 300.00,
+                            rows: 600,
+                            time: 12.00
+                        },
+                        {
+                            operation: "Parallel Seq Scan On Company Information Table With Extended Name",
+                            cost: 250.00,
+                            rows: 500,
+                            time: 10.00
+                        }
+                    ]
+                }
+            ]
+        };
+
+        function renderTestVisualization(treeData, container) {
+            // Set dimensions with much more generous spacing for text
+            const margin = {top: 30, right: 300, bottom: 50, left: 300};
+            const width = Math.max(800, 1200);
+            const height = 600;
+
+            // Clear container
+            container.innerHTML = '';
+
+            // Create SVG with much larger dimensions to accommodate text
+            const svg = d3.select(container).append("svg")
+                .attr("width", width + margin.right + margin.left)
+                .attr("height", height + margin.top + margin.bottom)
+                .style("overflow", "visible")
+                .append("g")
+                .attr("transform", `translate(${margin.left},${margin.top})`);
+
+            // Use the tree data
+            const root = d3.hierarchy(treeData, d => d.children);
+            
+            // Calculate performance metrics
+            let maxCost = 0;
+            root.each(d => {
+                if (d.data.cost > maxCost) maxCost = d.data.cost;
+            });
+            
+            // Color scale
+            const colorScale = d3.scaleLinear()
+                .domain([0, maxCost])
+                .range(["#10b981", "#f59e0b", "#ef4444"]);
+
+            // Tree layout with increased separation
+            const tree = d3.tree().size([width, height]).separation((a, b) => {
+                return (a.parent === b.parent ? 2.0 : 2.5);
+            });
+
+            const treeData2 = tree(root);
+            const nodes = treeData2.descendants();
+            const links = treeData2.links();
+
+            // Links
+            svg.selectAll(".link")
+                .data(links)
+                .enter().append("path")
+                .attr("class", "link")
+                .attr("d", d3.linkVertical()
+                    .x(d => d.x)
+                    .y(d => d.y))
+                .style("fill", "none")
+                .style("stroke", "#3b82f6")
+                .style("stroke-width", 2.5)
+                .style("stroke-opacity", 0.8);
+
+            // Nodes
+            const node = svg.selectAll(".node")
+                .data(nodes)
+                .enter().append("g")
+                .attr("class", "node")
+                .attr("transform", d => `translate(${d.x},${d.y})`);
+
+            // Circles
+            node.append("circle")
+                .attr("r", 20)
+                .style("fill", d => colorScale(d.data.cost))
+                .style("stroke", "#ffffff")
+                .style("stroke-width", 2.5)
+                .style("filter", "drop-shadow(0 2px 4px rgba(0,0,0,0.1))");
+
+            // Function to calculate optimal text position
+            function calculateTextPosition(d, textType) {
+                const baseOffset = 50;
+                const verticalSpacing = {
+                    'operation': 0,
+                    'metrics': 2.5,
+                    'indicators': 4.2
+                };
+                
+                let xOffset = baseOffset;
+                let yOffset = verticalSpacing[textType] || 0;
+                
+                const hasChildren = d.children && d.children.length > 0;
+                const isLeftSide = hasChildren;
+                
+                if (isLeftSide) {
+                    xOffset = -xOffset;
+                }
+                
+                return {
+                    x: xOffset,
+                    y: yOffset,
+                    anchor: isLeftSide ? "end" : "start"
+                };
+            }
+
+            // Operation labels
+            node.append("text")
+                .attr("class", "operation-label")
+                .attr("dy", d => calculateTextPosition(d, 'operation').y + "em")
+                .attr("x", d => calculateTextPosition(d, 'operation').x)
+                .style("text-anchor", d => calculateTextPosition(d, 'operation').anchor)
+                .text(d => d.data.operation)
+                .style("font-size", "13px")
+                .style("font-weight", "600")
+                .style("fill", "#1f2937")
+                .style("text-shadow", "0 1px 2px rgba(255,255,255,0.8)")
+                .style("letter-spacing", "0.5px")
+                .style("dominant-baseline", "middle")
+                .style("overflow", "visible")
+                .style("white-space", "normal");
+
+            // Metrics
+            node.append("text")
+                .attr("class", "metrics")
+                .attr("dy", d => calculateTextPosition(d, 'metrics').y + "em")
+                .attr("x", d => calculateTextPosition(d, 'metrics').x)
+                .style("text-anchor", d => calculateTextPosition(d, 'metrics').anchor)
+                .text(d => {
+                    let metrics = [];
+                    if (d.data.cost !== undefined && d.data.cost !== null) {
+                        metrics.push(`Cost: ${d.data.cost.toFixed(2)}`);
+                    }
+                    if (d.data.rows !== undefined && d.data.rows !== null) {
+                        metrics.push(`Rows: ${d.data.rows.toLocaleString()}`);
+                    }
+                    if (d.data.time !== undefined && d.data.time !== null && d.data.time > 0) {
+                        metrics.push(`Time: ${d.data.time.toFixed(2)}ms`);
+                    }
+                    if (metrics.length === 0) {
+                        metrics.push("No metrics available");
+                    }
+                    return metrics.join(" | ");
+                })
+                .style("font-size", "11px")
+                .style("fill", "#6b7280")
+                .style("font-weight", "500")
+                .style("text-shadow", "0 1px 2px rgba(255,255,255,0.8)")
+                .style("dominant-baseline", "middle")
+                .style("overflow", "visible")
+                .style("white-space", "normal");
+        }
+
+        // Initialize the test visualization
+        renderTestVisualization(testData, document.getElementById('visualization'));
+    </script>
+</body>
+</html> 

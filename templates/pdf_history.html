@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SQL Analysis History PDF</title>
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #fff; color: #212529; margin: 0; padding: 2em; }
+        .header { color: #2563eb; font-size: 2em; margin-bottom: 0.5em; }
+        .section { margin-bottom: 2em; border: 1px solid #e5e7eb; border-radius: 0.5em; padding: 1em; }
+        .section-title { background: #2563eb; color: #fff; padding: 0.5em 1em; border-radius: 0.5em 0.5em 0 0; font-size: 1.1em; font-weight: 500; margin: -1em -1em 1em -1em; }
+        pre { background: #f8f9fa; padding: 0.5em; border-radius: 0.3em; }
+        ul { margin: 0.5em 0 0.5em 1.5em; }
+        .subsection { margin-bottom: 0.5em; }
+    </style>
+</head>
+<body>
+    <div class="header">SQL Analysis History</div>
+    {% if history %}
+        {% for h in history %}
+        <div class="section">
+            <div class="section-title">Analysis #{{ loop.index }}</div>
+            <div class="subsection"><strong>SQL Query:</strong> <pre>{{ h.sql_query }}</pre></div>
+            <div class="subsection"><strong>Database Engine:</strong> {{ h.db_engine|capitalize }}</div>
+            {% if h.tables %}<div class="subsection"><strong>Tables:</strong> <pre>{{ h.tables|tojson(indent=2) }}</pre></div>{% endif %}
+            {% if h.indexes %}<div class="subsection"><strong>Indexes:</strong> <pre>{{ h.indexes|tojson(indent=2) }}</pre></div>{% endif %}
+            {% if h.explain_plan %}<div class="subsection"><strong>EXPLAIN Plan:</strong> <pre>{{ h.explain_plan }}</pre></div>{% endif %}
+            <div class="subsection"><strong>Summary:</strong> {{ h.report.summary }}</div>
+            {% if h.report.recommendations %}<div class="subsection"><strong>Recommendations:</strong><ul>{% for rec in h.report.recommendations %}<li>{{ rec }}</li>{% endfor %}</ul></div>{% endif %}
+            {% if h.report.warnings %}<div class="subsection"><strong>Warnings:</strong><ul>{% for warn in h.report.warnings %}<li>{{ warn }}</li>{% endfor %}</ul></div>{% endif %}
+            {% if h.report.optimized_query %}<div class="subsection"><strong>Optimized Query:</strong> <pre>{{ h.report.optimized_query }}</pre></div>{% endif %}
+        </div>
+        {% endfor %}
+    {% else %}
+        <div class="section">No analysis history available.</div>
+    {% endif %}
+</body>
+</html> 

@@ -1,0 +1,1119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQL Analysis Report</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        :root {
+            --bs-primary: #2563eb;
+            --bs-primary-rgb: 37, 99, 235;
+            --modern-info: #0ea5e9;
+            --modern-success: #22c55e;
+            --modern-warning: #facc15;
+            --modern-danger: #ef4444;
+            --modern-muted: #6c757d;
+            --modern-bg: #f8f9fa;
+            
+            /* Light mode colors */
+            --bg-primary: #f8fafc;
+            --bg-secondary: #ffffff;
+            --text-primary: #1f2937;
+            --text-secondary: #6b7280;
+            --border-color: #e5e7eb;
+            --card-bg: #ffffff;
+            --input-bg: #ffffff;
+            --input-border: #d1d5db;
+        }
+        
+        [data-theme="dark"] {
+            --bg-primary: #111827;
+            --bg-secondary: #1f2937;
+            --text-primary: #f9fafb;
+            --text-secondary: #d1d5db;
+            --border-color: #374151;
+            --card-bg: #1f2937;
+            --input-bg: #374151;
+            --input-border: #4b5563;
+        }
+        
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+        .card {
+            border-radius: 0.5rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            transition: background-color 0.3s ease, border-color 0.3s ease;
+        }
+        .section-header {
+            background: var(--bs-primary);
+            color: #fff;
+            border-radius: 0.5rem 0.5rem 0 0;
+            padding: 0.75rem 1rem;
+            font-size: 1.1rem;
+            font-weight: 500;
+        }
+        #sticky-back-btn {
+            position: fixed;
+            left: 24px;
+            bottom: 24px;
+            z-index: 2000;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+            border-radius: 0.5rem;
+            background: #2563eb;
+            color: #fff;
+            font-size: 1.1rem;
+            padding: 0.75em 2em;
+            transition: opacity 0.2s, background 0.2s, box-shadow 0.2s;
+            opacity: 0.4;
+        }
+        #sticky-back-btn:hover, #sticky-back-btn:focus {
+            background: #1746a0;
+            box-shadow: 0 4px 16px rgba(37,99,235,0.18);
+            color: #fff;
+            outline: none;
+            opacity: 1;
+        }
+        @media (max-width: 575.98px) {
+            #sticky-back-btn {
+                display: none;
+            }
+        }
+        .performance-score-circle {
+            box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+            transition: transform 0.3s ease;
+        }
+        .performance-score-circle:hover {
+            transform: scale(1.05);
+        }
+        .bg-success {
+            background-color: #22c55e !important;
+        }
+        .bg-info {
+            background-color: #0ea5e9 !important;
+        }
+        .bg-warning {
+            background-color: #facc15 !important;
+        }
+        .bg-danger {
+            background-color: #ef4444 !important;
+        }
+        
+        /* Performance Metrics Styles */
+        .metrics-grid {
+            display: grid;
+            gap: 0.75rem;
+        }
+        
+        .metric-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.5rem;
+            background-color: var(--bg-secondary);
+            border-radius: 0.375rem;
+            border: 1px solid var(--border-color);
+        }
+        
+        .metric-label {
+            font-weight: 500;
+            color: var(--text-secondary);
+        }
+        
+        .metric-value {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .performance-grade {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 1rem;
+            background-color: var(--bg-secondary);
+            border-radius: 0.5rem;
+            border: 1px solid var(--border-color);
+        }
+        
+        .grade-letter {
+            font-size: 3rem;
+            font-weight: bold;
+            width: 80px;
+            height: 80px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            color: white;
+        }
+        
+        .grade-a { background-color: #22c55e; }
+        .grade-b { background-color: #3b82f6; }
+        .grade-c { background-color: #f59e0b; }
+        .grade-d { background-color: #f97316; }
+        .grade-f { background-color: #ef4444; }
+        
+        .grade-description {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            line-height: 1.4;
+        }
+    </style>
+</head>
+<body>
+<div class="container mt-5">
+    {% if report and report.engine_mismatch %}
+    <div class="d-flex justify-content-center align-items-center" style="min-height: 40vh;">
+        <div class="card shadow-lg border-danger" style="max-width: 600px; width: 100%;">
+            <div class="card-header bg-danger text-white d-flex align-items-center">
+                <i class="fas fa-exclamation-triangle fa-2x me-3"></i>
+                <span style="font-size: 1.25rem; font-weight: 600;">Engine Mismatch Detected</span>
+            </div>
+            <div class="card-body text-center">
+                <p class="mb-4" style="font-size: 1.1rem;">
+                    {{ report.summary[0] if report.summary and report.summary|length > 0 else 'The EXPLAIN plan does not match the selected database engine. Please correct your input for accurate analysis.' }}
+                </p>
+                <a href="/" class="btn btn-primary btn-lg mt-2" style="min-width: 200px;">
+                    <i class="fas fa-arrow-left me-2"></i>Back to Analyzer
+                </a>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+    {% if not report or not report.engine_mismatch %}
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h1 class="mb-0">SQL Analysis Report</h1>
+        <div class="d-flex align-items-center">
+            <!-- Dark Mode Toggle -->
+            <button id="dark-mode-toggle" class="btn btn-outline-secondary btn-sm me-2" title="Toggle Dark Mode">
+                <i class="fas fa-moon" id="dark-mode-icon"></i>
+            </button>
+            <!-- Share Button -->
+            {% if report %}
+            <button id="share-analysis-btn" class="btn btn-outline-success btn-sm me-2" title="Share Analysis">
+                <i class="fas fa-share-alt me-1"></i>Share
+            </button>
+            {% endif %}
+            <!-- Export Dropdown -->
+            <div class="dropdown me-2">
+                <button class="btn btn-outline-primary dropdown-toggle" type="button" id="exportDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                    <i class="fas fa-download me-1"></i>Export
+                </button>
+                <ul class="dropdown-menu" aria-labelledby="exportDropdown">
+                    {% if report %}
+                    <li><a class="dropdown-item" href="#" onclick="downloadReport()">
+                        <i class="fas fa-file-code me-2"></i>Current Report (JSON)
+                    </a></li>
+                    <li><a class="dropdown-item" href="#" onclick="downloadReportCSV()">
+                        <i class="fas fa-file-csv me-2"></i>Current Report (CSV)
+                    </a></li>
+                    <li><a class="dropdown-item" href="#" onclick="downloadReportMarkdown()">
+                        <i class="fas fa-file-alt me-2"></i>Current Report (Markdown)
+                    </a></li>
+                    {% endif %}
+                    {% if history and history|length > 0 %}
+                    <li><hr class="dropdown-divider"></li>
+                    <li><a class="dropdown-item" href="#" onclick="downloadAllHistory()">
+                        <i class="fas fa-history me-2"></i>All History (JSON)
+                    </a></li>
+                    <li><a class="dropdown-item" href="/download_history_csv">
+                        <i class="fas fa-file-csv me-2"></i>All History (CSV)
+                    </a></li>
+                    {% endif %}
+                </ul>
+            </div>
+            <!-- Analytics Button -->
+            <a href="/analytics" class="btn btn-outline-warning btn-sm me-2" title="Analytics Dashboard">
+                <i class="fas fa-chart-bar me-1"></i>Analytics
+            </a>
+            <!-- Compare Button -->
+            <a href="/compare" class="btn btn-outline-info btn-sm me-2" title="Query Comparison">
+                <i class="fas fa-balance-scale me-1"></i>Compare
+            </a>
+            <!-- Clear History Button -->
+            <form method="POST" action="/clear_history" style="display:inline;" id="clear-history-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                <button type="button" class="btn btn-outline-danger btn-sm" onclick="confirmClearHistory()" id="clear-history-btn">
+                    <i class="fas fa-trash me-1"></i>Clear History
+                </button>
+            </form>
+        </div>
+    </div>
+    <div class="alert alert-info mb-4">Below is a detailed analysis of your SQL query and related metadata.</div>
+    {% if history and history|length > 1 %}
+    <div class="card mb-4">
+        <div class="section-header">Recent Analyses (Last 5)</div>
+        <div class="card-body">
+            <div class="accordion" id="historyAccordion">
+                {% for h in history %}
+                <div class="accordion-item">
+                    <h2 class="accordion-header" id="heading{{ loop.index }}">
+                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse{{ loop.index }}" aria-expanded="false" aria-controls="collapse{{ loop.index }}">
+                            <span class="fw-bold">{{ h.db_engine|capitalize }}</span> | <span class="text-muted">{{ h.sql_query|truncate(60) }}</span>
+                        </button>
+                    </h2>
+                    <div id="collapse{{ loop.index }}" class="accordion-collapse collapse" aria-labelledby="heading{{ loop.index }}" data-bs-parent="#historyAccordion">
+                        <div class="accordion-body">
+                            <form method="POST" action="/">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                <input type="hidden" name="sql_query" value="{{ h.sql_query|e }}">
+                                <input type="hidden" name="db_engine" value="{{ h.db_engine }}">
+                                <input type="hidden" name="explain_plan" value="{{ h.explain_plan|e }}">
+                                {% for t in h.tables %}
+                                    <input type="hidden" name="table_name_{{ loop.index0 }}" value="{{ t.name|e }}">
+                                    <input type="hidden" name="table_ddl_{{ loop.index0 }}" value="{{ t.ddl|e }}">
+                                    <input type="hidden" name="table_rows_{{ loop.index0 }}" value="{{ t.rows|e }}">
+                                {% endfor %}
+                                {% for i in h.indexes %}
+                                    <input type="hidden" name="index_name_{{ loop.index0 }}" value="{{ i.name|e }}">
+                                    <input type="hidden" name="index_table_{{ loop.index0 }}" value="{{ i.table|e }}">
+                                    <input type="hidden" name="index_def_{{ loop.index0 }}" value="{{ i.definition|e }}">
+                                {% endfor %}
+                                <button type="submit" class="btn btn-outline-primary btn-sm mb-3">Re-run Analysis</button>
+                            </form>
+                            <form method="POST" action="/?edit=1">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                <input type="hidden" name="sql_query" value="{{ h.sql_query|e }}">
+                                <input type="hidden" name="db_engine" value="{{ h.db_engine }}">
+                                <input type="hidden" name="explain_plan" value="{{ h.explain_plan|e }}">
+                                {% for t in h.tables %}
+                                    <input type="hidden" name="table_name_{{ loop.index0 }}" value="{{ t.name|e }}">
+                                    <input type="hidden" name="table_ddl_{{ loop.index0 }}" value="{{ t.ddl|e }}">
+                                    <input type="hidden" name="table_rows_{{ loop.index0 }}" value="{{ t.rows|e }}">
+                                {% endfor %}
+                                {% for i in h.indexes %}
+                                    <input type="hidden" name="index_name_{{ loop.index0 }}" value="{{ i.name|e }}">
+                                    <input type="hidden" name="index_table_{{ loop.index0 }}" value="{{ i.table|e }}">
+                                    <input type="hidden" name="index_def_{{ loop.index0 }}" value="{{ i.definition|e }}">
+                                {% endfor %}
+                                <button type="submit" class="btn btn-outline-secondary btn-sm mb-3 ms-2">Edit</button>
+                            </form>
+                            <div><strong>SQL Query:</strong> <pre>{{ h.sql_query }}</pre></div>
+                            <div><strong>Database Engine:</strong> {{ h.db_engine|capitalize }}</div>
+                            {% if h.tables %}
+                            <div class="accordion mb-2" id="tablesAccordion{{ loop.index }}">
+                                <div class="accordion-item">
+                                    <h2 class="accordion-header" id="tablesHeading{{ loop.index }}">
+                                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#tablesCollapse{{ loop.index }}" aria-expanded="false" aria-controls="tablesCollapse{{ loop.index }}">
+                                            Tables ({{ h.tables|length }})
+                                        </button>
+                                    </h2>
+                                    <div id="tablesCollapse{{ loop.index }}" class="accordion-collapse collapse" aria-labelledby="tablesHeading{{ loop.index }}" data-bs-parent="#tablesAccordion{{ loop.index }}">
+                                        <div class="accordion-body">
+                                            <pre>{{ h.tables|tojson(indent=2) }}</pre>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endif %}
+                            {% if h.indexes %}
+                            <div class="accordion mb-2" id="indexesAccordion{{ loop.index }}">
+                                <div class="accordion-item">
+                                    <h2 class="accordion-header" id="indexesHeading{{ loop.index }}">
+                                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#indexesCollapse{{ loop.index }}" aria-expanded="false" aria-controls="indexesCollapse{{ loop.index }}">
+                                            Indexes ({{ h.indexes|length }})
+                                        </button>
+                                    </h2>
+                                    <div id="indexesCollapse{{ loop.index }}" class="accordion-collapse collapse" aria-labelledby="indexesHeading{{ loop.index }}" data-bs-parent="#indexesAccordion{{ loop.index }}">
+                                        <div class="accordion-body">
+                                            <pre>{{ h.indexes|tojson(indent=2) }}</pre>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endif %}
+                            {% if h.explain_plan %}<div><strong>EXPLAIN Plan:</strong> <pre>{{ h.explain_plan }}</pre></div>{% endif %}
+                            <div><strong>Summary:</strong> {{ h.report.summary }}</div>
+                            {% if h.report.recommendations %}<div><strong>Recommendations:</strong><ul>{% for rec in h.report.recommendations %}<li>{{ rec }}</li>{% endfor %}</ul></div>{% endif %}
+                            {% if h.report.warnings %}<div><strong>Warnings:</strong><ul>{% for warn in h.report.warnings %}<li>{{ warn }}</li>{% endfor %}</ul></div>{% endif %}
+                            {% if h.report.optimized_query %}<div><strong>Optimized Query:</strong> <pre>{{ h.report.optimized_query }}</pre></div>{% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    {% endif %}
+    <div class="mb-3">
+        <strong>Database Engine:</strong> {{ db_engine|capitalize }}
+    </div>
+    
+    {% if report and report.performance_score %}
+    <!-- Performance Score Section -->
+    <div class="card mb-4">
+        <div class="section-header">
+            <i class="fas fa-chart-line me-2"></i>Performance Score
+        </div>
+        <div class="card-body">
+            <div class="row align-items-center">
+                <div class="col-md-3 text-center">
+                    <div class="performance-score-circle bg-{{ report.performance_score.color }} text-white rounded-circle d-inline-flex align-items-center justify-content-center" 
+                         style="width: 120px; height: 120px; font-size: 2rem; font-weight: bold;">
+                        {{ report.performance_score.score }}
+                    </div>
+                    <div class="mt-2">
+                        <span class="badge bg-{{ report.performance_score.color }} fs-6">{{ report.performance_score.level }}</span>
+                    </div>
+                </div>
+                <div class="col-md-9">
+                    <h5 class="mb-3">Performance Analysis</h5>
+
+                    {# Score calculation #}
+                    {% if report.performance_score.calculation %}
+                    <div class="mb-3">
+                        <div class="alert alert-primary">
+                            <i class="fas fa-calculator me-2"></i>
+                            <strong>Score Calculation:</strong> {{ report.performance_score.calculation }}
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    {# Overall summary #}
+                    {% if report.performance_score.overall_summary %}
+                    <div class="mb-3">
+                        <div class="alert alert-info">
+                            <i class="fas fa-info-circle me-2"></i>
+                            <strong>Overall Summary:</strong> {{ report.performance_score.overall_summary }}
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    {# Detailed breakdown #}
+                    {% if report.performance_score.breakdown and report.performance_score.breakdown|length > 0 %}
+                    <div class="mb-3">
+                        <h6 class="mb-2"><i class="fas fa-list-alt me-1"></i>Score Breakdown</h6>
+                        <div class="accordion" id="scoreBreakdownAccordion">
+                            {% for group in report.performance_score.breakdown %}
+                            <div class="accordion-item mb-2">
+                                <h2 class="accordion-header" id="heading{{ loop.index }}">
+                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse{{ loop.index }}" aria-expanded="false" aria-controls="collapse{{ loop.index }}">
+                                        <span class="fw-bold">{{ group.category }}</span>
+                                    </button>
+                                </h2>
+                                <div id="collapse{{ loop.index }}" class="accordion-collapse collapse" aria-labelledby="heading{{ loop.index }}" data-bs-parent="#scoreBreakdownAccordion">
+                                    <div class="accordion-body">
+                                        <ul class="list-unstyled mb-0">
+                                            {% for item in group['items'] %}
+                                            <li class="mb-2">
+                                                <span class="badge {% if item.type == 'deduction' %}bg-danger{% else %}bg-success{% endif %} me-2">
+                                                    {% if item.type == 'deduction' %}-{% else %}+{% endif %}{{ item.points }}
+                                                </span>
+                                                <span class="fw-semibold">{{ item.reason }}</span>
+                                                {% if item.context %}
+                                                    <span class="text-muted small ms-2">[{{ item.context }}]</span>
+                                                {% endif %}
+                                            </li>
+                                            {% endfor %}
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <div class="alert alert-info">
+                        <i class="fas fa-info-circle me-2"></i>
+                        <strong>Score Breakdown:</strong> This score is based on query structure, indexing strategy, table sizes, and best practices. 
+                        Higher scores indicate better performance potential.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if report and report.performance_metrics %}
+    <!-- Performance Metrics Section -->
+    <div class="card mb-4">
+        <div class="section-header">
+            <i class="fas fa-tachometer-alt me-2"></i>Performance Metrics
+        </div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-6">
+                    <h6><i class="fas fa-clock me-2"></i>Execution Metrics</h6>
+                    <div class="metrics-grid">
+                        <div class="metric-item">
+                            <span class="metric-label">Estimated Time:</span>
+                            <span class="metric-value">
+                                {{ report.performance_metrics.estimated_execution_time.value }}
+                                <small class="text-muted">({{ report.performance_metrics.estimated_execution_time.source }})</small>
+                            </span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-label">Memory Usage:</span>
+                            <span class="metric-value">
+                                {{ report.performance_metrics.estimated_memory_usage.value }}
+                                <small class="text-muted">({{ report.performance_metrics.estimated_memory_usage.source }})</small>
+                            </span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-label">Rows Scanned:</span>
+                            <span class="metric-value">
+                                {% if report.performance_metrics.estimated_rows_scanned.value != 'Unknown' %}
+                                    {{ "{:,}".format(report.performance_metrics.estimated_rows_scanned.value) }}
+                                {% else %}
+                                    {{ report.performance_metrics.estimated_rows_scanned.value }}
+                                {% endif %}
+                                <small class="text-muted">({{ report.performance_metrics.estimated_rows_scanned.source }})</small>
+                            </span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-label">Cost:</span>
+                            <span class="metric-value">
+                                {{ report.performance_metrics.cost.value }}
+                                <small class="text-muted">({{ report.performance_metrics.cost.source }})</small>
+                            </span>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <h6><i class="fas fa-chart-line me-2"></i>Complexity Analysis</h6>
+                    <div class="metrics-grid">
+                        <div class="metric-item">
+                            <span class="metric-label">Complexity Score:</span>
+                            <span class="metric-value">{{ report.performance_metrics.complexity_score }}/100</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-label">Join Complexity:</span>
+                            <span class="metric-value">{{ report.performance_metrics.join_complexity }} joins</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-label">Aggregation Complexity:</span>
+                            <span class="metric-value">{{ report.performance_metrics.aggregation_complexity }} functions</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-label">Index Utilization:</span>
+                            <span class="metric-value">{{ "%.1f"|format(report.performance_metrics.index_utilization) }}%</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="row mt-3">
+                <div class="col-md-6">
+                    <h6><i class="fas fa-graduation-cap me-2"></i>Performance Grade</h6>
+                    <div class="performance-grade">
+                        <span class="grade-letter grade-{{ report.performance_metrics.performance_grade.lower() }}">{{ report.performance_metrics.performance_grade }}</span>
+                        <span class="grade-description">
+                            {% if report.performance_metrics.performance_grade == 'A' %}
+                                Excellent - Query is well-optimized
+                            {% elif report.performance_metrics.performance_grade == 'B' %}
+                                Good - Minor optimizations possible
+                            {% elif report.performance_metrics.performance_grade == 'C' %}
+                                Fair - Some optimizations recommended
+                            {% elif report.performance_metrics.performance_grade == 'D' %}
+                                Poor - Significant optimizations needed
+                            {% else %}
+                                Failing - Major performance issues
+                            {% endif %}
+                        </span>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <h6><i class="fas fa-lightbulb me-2"></i>Optimization Insights</h6>
+                    <div class="metrics-grid">
+                        <div class="metric-item">
+                            <span class="metric-label">Query Efficiency:</span>
+                            <span class="metric-value">{{ report.performance_metrics.query_efficiency }}/100</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-label">Data Access Pattern:</span>
+                            <span class="metric-value">{{ report.performance_metrics.data_access_pattern }}</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-label">Optimization Potential:</span>
+                            <span class="metric-value">{{ report.performance_metrics.optimization_potential }}/100</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if report %}
+        {% if report and (not report.tables or report.tables|length == 0) and (not report.indexes or report.indexes|length == 0) %}
+        <div class="alert alert-info mb-3">
+            <strong>Tip:</strong> For a more accurate analysis, please provide your table and index details even though they are optional. This helps us give you better recommendations and insights.
+        </div>
+        {% endif %}
+        <div class="card mb-3">
+            <div class="section-header">Summary</div>
+            <div class="card-body">
+                {% if report.summary is sequence and not report.summary is string and report.summary|length > 0 %}
+                <ul>
+                {% for item in report.summary %}
+                    <li>{{ item }}</li>
+                {% endfor %}
+                </ul>
+                {% else %}
+                <p>{{ report.summary[0] if report.summary is sequence and not report.summary is string and report.summary|length == 1 else report.summary or 'No summary available for this query.' }}</p>
+                {% endif %}
+            </div>
+        </div>
+        {% if report.tables %}
+        <div class="accordion mb-3" id="tablesAccordionCurrent">
+            <div class="accordion-item">
+                <h2 class="accordion-header" id="tablesHeadingCurrent">
+                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#tablesCollapseCurrent" aria-expanded="false" aria-controls="tablesCollapseCurrent">
+                        Tables ({{ report.tables|length }})
+                    </button>
+                </h2>
+                <div id="tablesCollapseCurrent" class="accordion-collapse collapse" aria-labelledby="tablesHeadingCurrent" data-bs-parent="#tablesAccordionCurrent">
+                    <div class="accordion-body">
+                        <pre>{{ report.tables|tojson(indent=2) }}</pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+        {% if report.indexes %}
+        <div class="accordion mb-3" id="indexesAccordionCurrent">
+            <div class="accordion-item">
+                <h2 class="accordion-header" id="indexesHeadingCurrent">
+                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#indexesCollapseCurrent" aria-expanded="false" aria-controls="indexesCollapseCurrent">
+                        Indexes ({{ report.indexes|length }})
+                    </button>
+                </h2>
+                <div id="indexesCollapseCurrent" class="accordion-collapse collapse" aria-labelledby="indexesHeadingCurrent" data-bs-parent="#indexesAccordionCurrent">
+                    <div class="accordion-body">
+                        <pre>{{ report.indexes|tojson(indent=2) }}</pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+        {% if report.recommendations and report.recommendations|length > 0 and (report.recommendations[0].text != 'No actionable recommendations 🎉' or report.recommendations|length > 1) %}
+        <div class="card mb-3">
+            <div class="section-header">Recommendations</div>
+            <div class="card-body">
+                {% set actionable_count = report.actionable_count if report.actionable_count is defined else report.recommendations|selectattr('actionable')|list|length %}
+                <div class="mb-2">
+                    {% if actionable_count == 0 %}
+                        <span class="text-success">No actionable recommendations 🎉</span>
+                    {% elif actionable_count == 1 %}
+                        <span class="text-warning">1 actionable recommendation</span>
+                    {% elif actionable_count == 2 %}
+                        <span class="text-warning">2 actionable recommendations</span>
+                    {% else %}
+                        <span class="text-info">Refer to the recommendation section for more details.</span>
+                    {% endif %}
+                </div>
+                <ul>
+                {% for rec in report.recommendations if rec.text and rec.text != 'No actionable recommendations 🎉' %}
+                    <li>
+                        {% if rec.actionable %}
+                            <span class="badge bg-warning text-dark me-1">Actionable</span>
+                        {% endif %}
+                        {{ rec.text }}
+                        {% if rec.sub and rec.sub|length > 0 %}
+                            <ul class="ms-4">
+                                {% for subrec in rec.sub %}
+                                    <li>{{ subrec.text }}</li>
+                                {% endfor %}
+                            </ul>
+                        {% endif %}
+                    </li>
+                {% endfor %}
+                </ul>
+            </div>
+        </div>
+        {% elif report.recommendations and report.recommendations|length == 1 and report.recommendations[0].text == 'No actionable recommendations 🎉' %}
+        <div class="card mb-3">
+            <div class="section-header">Recommendations</div>
+            <div class="card-body">
+                <span class="text-success">No actionable recommendations 🎉</span>
+            </div>
+        </div>
+        {% endif %}
+        {% if report.warnings %}
+        <div class="card mb-3">
+            <div class="section-header">Warnings</div>
+            <div class="card-body">
+                <ul>
+                {% for warn in report.warnings %}
+                    <li>{{ warn }}</li>
+                {% endfor %}
+                </ul>
+            </div>
+        </div>
+        {% endif %}
+        {% if report.optimized_query %}
+        <div class="card mb-3">
+            <div class="section-header">Optimized Query Suggestion</div>
+            <div class="card-body">
+                <pre>{{ report.optimized_query }}</pre>
+            </div>
+        </div>
+        {% endif %}
+        {% if report and report.explain_mermaid %}
+        <div class="card mb-3">
+            <div class="section-header">EXPLAIN Plan Visualization</div>
+            <div class="card-body">
+                <div id="explain_visualization_output"></div>
+            </div>
+        </div>
+        {% endif %}
+    {% else %}
+        <div class="alert alert-warning">No analysis report available yet.</div>
+    {% endif %}
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.0/dist/mermaid.min.js"></script>
+    <script>
+        if(window.mermaid){
+            mermaid.initialize({
+                startOnLoad: true,
+                theme: 'default',
+                flowchart: {
+                    useMaxWidth: true,
+                    htmlLabels: true,
+                    curve: 'basis'
+                }
+            });
+        }
+    </script>
+    
+    <style>
+        /* Mermaid diagram styling */
+        .mermaid {
+            text-align: center;
+            margin: 1rem 0;
+        }
+        
+        /* Node styling for different operation types */
+        .seq-scan {
+            fill: #fecaca !important;
+            stroke: #dc2626 !important;
+        }
+        
+        .index-scan {
+            fill: #dbeafe !important;
+            stroke: #2563eb !important;
+        }
+        
+        .join {
+            fill: #fef3c7 !important;
+            stroke: #d97706 !important;
+        }
+        
+        .aggregate {
+            fill: #d1fae5 !important;
+            stroke: #059669 !important;
+        }
+        
+        .filter {
+            fill: #f3e8ff !important;
+            stroke: #7c3aed !important;
+        }
+        
+        .result {
+            fill: #fef2f2 !important;
+            stroke: #dc2626 !important;
+        }
+        
+        .default {
+            fill: #f3f4f6 !important;
+            stroke: #6b7280 !important;
+        }
+        
+        /* Dark mode support */
+        [data-theme="dark"] .seq-scan {
+            fill: #7f1d1d !important;
+            stroke: #fca5a5 !important;
+        }
+        
+        [data-theme="dark"] .index-scan {
+            fill: #1e3a8a !important;
+            stroke: #93c5fd !important;
+        }
+        
+        [data-theme="dark"] .join {
+            fill: #92400e !important;
+            stroke: #fcd34d !important;
+        }
+        
+        [data-theme="dark"] .aggregate {
+            fill: #064e3b !important;
+            stroke: #6ee7b7 !important;
+        }
+        
+        [data-theme="dark"] .filter {
+            fill: #581c87 !important;
+            stroke: #c4b5fd !important;
+        }
+        
+        [data-theme="dark"] .result {
+            fill: #7f1d1d !important;
+            stroke: #fca5a5 !important;
+        }
+        
+        [data-theme="dark"] .default {
+            fill: #374151 !important;
+            stroke: #9ca3af !important;
+        }
+    </style>
+    
+    <!-- Pass data to JavaScript -->
+    <script>
+        // Global variables for sharing
+        window.analysisData = {
+            sql_query: {{ sql_query|tojson if sql_query else '""' }},
+            db_engine: {{ db_engine|tojson if db_engine else '""' }},
+            tables: {{ tables|tojson if tables else '[]' }},
+            indexes: {{ indexes|tojson if indexes else '[]' }},
+            report: {{ report|tojson if report else '{}' }}
+        };
+    </script>
+    
+    <script>
+    function downloadReport() {
+        const data = {{ report|tojson if report else '{}' }};
+        const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'sql_analysis_report.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+    function downloadReportCSV() {
+        const report = {{ report|tojson if report else '{}' }};
+        let csv = 'Section,Content\n';
+        if (report.summary) {
+            csv += 'Summary,"' + (Array.isArray(report.summary) ? report.summary.join('; ') : report.summary) + '"\n';
+        }
+        if (report.recommendations && report.recommendations.length) {
+            csv += 'Recommendations,"' + report.recommendations.join('; ') + '"\n';
+        }
+        if (report.warnings && report.warnings.length) {
+            csv += 'Warnings,"' + report.warnings.join('; ') + '"\n';
+        }
+        if (report.optimized_query) {
+            csv += 'Optimized Query,"' + report.optimized_query.replace(/"/g, '""') + '"\n';
+        }
+        if (report.explain_mermaid) {
+            csv += 'EXPLAIN Plan Visualization,"' + report.explain_mermaid.replace(/"/g, '""') + '"\n';
+        }
+        const blob = new Blob([csv], {type: 'text/csv'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'sql_analysis_report.csv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+    function confirmClearHistory() {
+        if (confirm('Are you sure you want to clear all analysis history? This action cannot be undone.')) {
+            const button = document.getElementById('clear-history-btn');
+            const originalText = button.innerHTML;
+            button.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Clearing...';
+            button.disabled = true;
+            
+            // Submit the form
+            document.getElementById('clear-history-form').submit();
+        }
+    }
+
+    function downloadReportMarkdown() {
+        const report = {{ report|tojson if report else '{}' }};
+        let md = '# SQL Analysis Report\n\n';
+        if (report.summary) {
+            md += '## Summary\n' + (Array.isArray(report.summary) ? report.summary.join('\n- ') : report.summary) + '\n\n';
+        }
+        if (report.recommendations && report.recommendations.length) {
+            md += '## Recommendations\n';
+            report.recommendations.forEach(r => { md += '- ' + r + '\n'; });
+            md += '\n';
+        }
+        if (report.warnings && report.warnings.length) {
+            md += '## Warnings\n';
+            report.warnings.forEach(w => { md += '- ' + w + '\n'; });
+            md += '\n';
+        }
+        if (report.optimized_query) {
+            md += '## Optimized Query\n```sql\n' + report.optimized_query + '\n```\n\n';
+        }
+        if (report.explain_mermaid) {
+            md += '## EXPLAIN Plan Visualization\n```mermaid\n' + report.explain_mermaid + '\n```\n\n';
+        }
+        const blob = new Blob([md], {type: 'text/markdown'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'sql_analysis_report.md';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+    function downloadAllHistory() {
+        const data = {{ history|tojson if history else '[]' }};
+        const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'sql_analysis_history.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+    
+    // Dark mode functionality
+    document.addEventListener('DOMContentLoaded', function() {
+        initializeDarkMode();
+    });
+
+    function initializeDarkMode() {
+        const darkModeToggle = document.getElementById('dark-mode-toggle');
+        const darkModeIcon = document.getElementById('dark-mode-icon');
+        
+        // Check for saved theme preference or default to light mode
+        const currentTheme = localStorage.getItem('theme') || 'light';
+        document.documentElement.setAttribute('data-theme', currentTheme);
+        updateDarkModeIcon(currentTheme);
+        
+        // Add click event listener
+        darkModeToggle.addEventListener('click', function() {
+            const currentTheme = document.documentElement.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            
+            // Update theme
+            document.documentElement.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            updateDarkModeIcon(newTheme);
+            
+            // Announce theme change for accessibility
+            const announcement = document.createElement('div');
+            announcement.setAttribute('aria-live', 'polite');
+            announcement.setAttribute('aria-label', `Switched to ${newTheme} mode`);
+            announcement.style.position = 'absolute';
+            announcement.style.left = '-10000px';
+            announcement.style.width = '1px';
+            announcement.style.height = '1px';
+            announcement.style.overflow = 'hidden';
+            document.body.appendChild(announcement);
+            setTimeout(() => document.body.removeChild(announcement), 1000);
+        });
+    }
+
+    function updateDarkModeIcon(theme) {
+        const darkModeIcon = document.getElementById('dark-mode-icon');
+        const darkModeToggle = document.getElementById('dark-mode-toggle');
+        
+        if (theme === 'dark') {
+            darkModeIcon.className = 'fas fa-sun';
+            darkModeToggle.title = 'Switch to Light Mode';
+            darkModeToggle.classList.remove('btn-outline-secondary');
+            darkModeToggle.classList.add('btn-outline-warning');
+        } else {
+            darkModeIcon.className = 'fas fa-moon';
+            darkModeToggle.title = 'Switch to Light Mode';
+            darkModeToggle.classList.remove('btn-outline-warning');
+            darkModeToggle.classList.add('btn-outline-secondary');
+        }
+    }
+
+    // Share functionality
+    document.addEventListener('DOMContentLoaded', function() {
+        const shareBtn = document.getElementById('share-analysis-btn');
+        if (shareBtn) {
+            shareBtn.addEventListener('click', shareAnalysis);
+        }
+    });
+
+    function shareAnalysis() {
+        const shareBtn = document.getElementById('share-analysis-btn');
+        const originalText = shareBtn.innerHTML;
+        
+        // Show loading state
+        shareBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Generating...';
+        shareBtn.disabled = true;
+        
+        // Prepare analysis data using global variable
+        const analysisData = {
+            ...window.analysisData,
+            timestamp: new Date().toISOString()
+        };
+        
+        // Send to server
+        fetch('/share_analysis', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': '{{ csrf_token() }}'
+            },
+            body: JSON.stringify({
+                analysis_data: analysisData
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.share_url) {
+                // Copy URL to clipboard
+                navigator.clipboard.writeText(data.share_url).then(function() {
+                    showShareSuccess(data.share_url);
+                }).catch(function(err) {
+                    // Fallback for older browsers
+                    const textArea = document.createElement('textarea');
+                    textArea.value = data.share_url;
+                    document.body.appendChild(textArea);
+                    textArea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textArea);
+                    showShareSuccess(data.share_url);
+                });
+            } else {
+                showShareError(data.error || 'Failed to generate share link');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            showShareError('Failed to generate share link');
+        })
+        .finally(() => {
+            // Reset button
+            shareBtn.innerHTML = originalText;
+            shareBtn.disabled = false;
+        });
+    }
+
+    function showShareSuccess(shareUrl) {
+        // Create success modal
+        const modal = document.createElement('div');
+        modal.className = 'modal fade';
+        modal.id = 'shareSuccessModal';
+        modal.innerHTML = `
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header bg-success text-white">
+                        <h5 class="modal-title">
+                            <i class="fas fa-check-circle me-2"></i>Analysis Shared Successfully!
+                        </h5>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p>Your analysis has been shared and the link has been copied to your clipboard!</p>
+                        <div class="input-group">
+                            <input type="text" class="form-control" value="${shareUrl}" readonly>
+                            <button class="btn btn-outline-primary" onclick="copyToClipboard('${shareUrl}')">
+                                <i class="fas fa-copy"></i>
+                            </button>
+                        </div>
+                        <small class="text-muted mt-2 d-block">
+                            <i class="fas fa-info-circle me-1"></i>
+                            This link will expire in 24 hours for security.
+                        </small>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                        <a href="${shareUrl}" class="btn btn-primary" target="_blank">
+                            <i class="fas fa-external-link-alt me-1"></i>Open Shared Link
+                        </a>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        // Show modal
+        const bootstrapModal = new bootstrap.Modal(modal);
+        bootstrapModal.show();
+        
+        // Clean up modal after it's hidden
+        modal.addEventListener('hidden.bs.modal', function() {
+            document.body.removeChild(modal);
+        });
+    }
+
+    function showShareError(message) {
+        // Create error toast
+        const toast = document.createElement('div');
+        toast.className = 'alert alert-danger alert-dismissible fade show position-fixed';
+        toast.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+        toast.innerHTML = `
+            <i class="fas fa-exclamation-triangle me-2"></i>
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        `;
+        
+        document.body.appendChild(toast);
+        
+        // Auto-remove after 5 seconds
+        setTimeout(() => {
+            if (toast.parentNode) {
+                toast.parentNode.removeChild(toast);
+            }
+        }, 5000);
+    }
+
+    function copyToClipboard(text) {
+        navigator.clipboard.writeText(text).then(function() {
+            // Show success feedback
+            const button = event.target;
+            const originalText = button.innerHTML;
+            button.innerHTML = '<i class="fas fa-check"></i>';
+            button.classList.remove('btn-outline-primary');
+            button.classList.add('btn-success');
+            
+            setTimeout(() => {
+                button.innerHTML = originalText;
+                button.classList.remove('btn-success');
+                button.classList.add('btn-outline-primary');
+            }, 2000);
+        }).catch(function(err) {
+            console.error('Failed to copy: ', err);
+        });
+    }
+    </script>
+</div>
+<style>
+    #sticky-back-btn {
+        position: fixed;
+        left: 24px;
+        bottom: 24px;
+        z-index: 2000;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+        border-radius: 0.5rem;
+        background: #2563eb;
+        color: #fff;
+        font-size: 1.1rem;
+        padding: 0.75em 2em;
+        transition: opacity 0.2s, background 0.2s, box-shadow 0.2s;
+        opacity: 0.4;
+    }
+    #sticky-back-btn:hover, #sticky-back-btn:focus {
+        background: #1746a0;
+        box-shadow: 0 4px 16px rgba(37,99,235,0.18);
+        color: #fff;
+        outline: none;
+        opacity: 1;
+    }
+    @media (max-width: 575.98px) {
+        #sticky-back-btn {
+            display: none;
+        }
+    }
+</style>
+<a href="/" id="sticky-back-btn" class="btn btn-primary btn-lg" aria-label="Back to SQL Input" title="Back to SQL Input">
+    <i class="fas fa-arrow-left me-2"></i>Back to Analyzer
+</a>
+{% endif %}
+</body>
+</html> 
