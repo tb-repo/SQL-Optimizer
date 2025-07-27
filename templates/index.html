@@ -363,6 +363,58 @@
                 {{ form.explain_plan(class="form-control", placeholder=form.explain_plan.render_kw.placeholder, rows=form.explain_plan.render_kw.rows, id="explain_plan_textarea", oninput="validateExplain()", aria_describedby="explain_plan_feedback explain_plan_help", title="EXPLAIN Plan") }}
                 <span id="explain_plan_feedback" class="form-text text-white" style="min-height:0;" aria-live="polite"></span>
                 <div class="form-text text-white" id="explain_plan_help">{{ form.explain_plan.description }}</div>
+                
+                <!-- Preferred EXPLAIN PLAN Commands for each Database Engine -->
+                <div class="mt-3">
+                    <div class="accordion" id="explainCommandsAccordion">
+                        <div class="accordion-item" style="background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.2);">
+                            <h2 class="accordion-header" id="explainCommandsHeader">
+                                <button class="accordion-button collapsed text-white" style="background: rgba(255, 255, 255, 0.1); border: none;" type="button" data-bs-toggle="collapse" data-bs-target="#explainCommandsCollapse" aria-expanded="false" aria-controls="explainCommandsCollapse">
+                                    <i class="fas fa-terminal me-2"></i>
+                                    <strong>Preferred EXPLAIN PLAN Commands for Best Results</strong>
+                                </button>
+                            </h2>
+                            <div id="explainCommandsCollapse" class="accordion-collapse collapse" aria-labelledby="explainCommandsHeader" data-bs-parent="#explainCommandsAccordion">
+                                <div class="accordion-body text-white" style="background: rgba(255, 255, 255, 0.05);">
+                                    <div class="row">
+                                        <div class="col-md-6 mb-3">
+                                            <h6 class="text-warning"><i class="fas fa-database me-1"></i>PostgreSQL</h6>
+                                            <code class="d-block bg-dark text-light p-2 rounded mb-2">EXPLAIN (ANALYZE, BUFFERS, COSTS, TIMING FORMAT TEXT) SELECT ...;</code>
+                                            <small class="text-light">Provides cost, rows, time, and buffer information for detailed analysis.</small>
+                                        </div>
+                                        <div class="col-md-6 mb-3">
+                                            <h6 class="text-warning"><i class="fas fa-database me-1"></i>Oracle</h6>
+                                            <code class="d-block bg-dark text-light p-2 rounded mb-2">EXPLAIN PLAN FOR SELECT ...;</code><br>
+                                            <code class="d-block bg-dark text-light p-2 rounded mb-2">SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY);</code>
+                                            <small class="text-light">Use pipe format for best visualization results.</small>
+                                        </div>
+                                        <div class="col-md-6 mb-3">
+                                            <h6 class="text-warning"><i class="fas fa-database me-1"></i>SQL Server</h6>
+                                            <code class="d-block bg-dark text-light p-2 rounded mb-2">SET STATISTICS XML ON;</code><br>
+                                            <code class="d-block bg-dark text-light p-2 rounded mb-2">SELECT ...;</code><br>
+                                            <code class="d-block bg-dark text-light p-2 rounded mb-2">SET STATISTICS XML OFF;</code>
+                                            <small class="text-light">XML format provides the most detailed execution plan information.</small>
+                                        </div>
+                                        <div class="col-md-6 mb-3">
+                                            <h6 class="text-warning"><i class="fas fa-database me-1"></i>MySQL</h6>
+                                            <code class="d-block bg-dark text-light p-2 rounded mb-2">EXPLAIN FORMAT=JSON SELECT ...;</code>
+                                            <small class="text-light">JSON format provides detailed cost and row information.</small>
+                                        </div>
+                                        <div class="col-md-6 mb-3">
+                                            <h6 class="text-warning"><i class="fas fa-database me-1"></i>SQLite</h6>
+                                            <code class="d-block bg-dark text-light p-2 rounded mb-2">EXPLAIN QUERY PLAN SELECT ...;</code>
+                                            <small class="text-light">Provides basic execution plan information.</small>
+                                        </div>
+                                    </div>
+                                    <div class="alert alert-info mt-3 mb-0" style="background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.2);">
+                                        <i class="fas fa-lightbulb me-2"></i>
+                                        <strong>Tip:</strong> Using these specific commands will provide the most accurate visualization and analysis results for each database engine.
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
         
@@ -742,7 +794,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 
 
-// Old loadSampleData function removed - now using the enhanced version in scripts.js
+// loadSampleData function is now defined in scripts.js and is engine-aware
 
 
 </script>

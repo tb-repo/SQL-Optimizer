@@ -1379,61 +1379,1342 @@ function renderD3Tree(treeData, container) {
             const oldTransform = g.getAttribute('transform') || '';
             g.setAttribute('transform', `translate(${margin.left},${margin.top + extraTop})`);
         }
-        
-        const serializer = new XMLSerializer();
-        const svgStr = serializer.serializeToString(tempSvg);
-        
-        const canvas = document.createElement("canvas");
-        canvas.width = fullWidth;
-        canvas.height = fullHeight;
-        const ctx = canvas.getContext("2d");
-        const img = new Image();
-        
-        img.onload = () => {
-            ctx.fillStyle = "white";
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.drawImage(img, 0, 0);
-            const png = canvas.toDataURL("image/png");
-            const a = document.createElement("a");
-            a.href = png;
-            a.download = "sql_execution_plan.png";
-            a.click();
-        };
-        
-        img.src = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(svgStr)));
-    }
+
+            performanceHotspots = allNodes.slice(0, hotspotCount).map(d => d.data.cost);
+            
+            // Enhanced color scale with more vibrant colors
+            const colorDomain = Math.max(maxCost, maxTime * 100, maxBufferReads * 10);
+
+            const colorScale = d3.scaleLinear()
+                .domain([0, colorDomain])
+                .range(["#10b981", "#f59e0b", "#ef4444"]); // Green -> Orange -> Red
+
+            // Dynamic separation based on plan complexity
+            const baseSeparation = 3.5;
+            const separationMultiplier = Math.max(1, planComplexity / 12);
+            
+            const tree = d3.tree().size([width, height]).separation((a, b) => {
+                // Balanced separation between siblings to prevent text overlap while maintaining proximity
+                const separation = baseSeparation * separationMultiplier;
+                return (a.parent === b.parent ? separation : separation * 1.2);
+            });
+
+            // Assigns the data to a hierarchy using parent-child relationships
+            const treeData2 = tree(root);
+
+            // CENTER THE TREE BY DEFAULT
+            const treeBounds = treeData2.descendants().reduce((bounds, d) => {
+                bounds.x0 = Math.min(bounds.x0, d.x);
+                bounds.x1 = Math.max(bounds.x1, d.x);
+                bounds.y0 = Math.min(bounds.y0, d.y);
+                bounds.y1 = Math.max(bounds.y1, d.y);
+                return bounds;
+            }, {x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity});
+
+            // Calculate centering transform
+            const treeWidth = treeBounds.x1 - treeBounds.x0;
+            const treeHeight = treeBounds.y1 - treeBounds.y0;
+            const centerX = (width - treeWidth) / 2 - treeBounds.x0;
+            const centerY = (height - treeHeight) / 2 - treeBounds.y0;
+
+            // Apply centering transform to all nodes
+            treeData2.descendants().forEach(d => {
+                d.x += centerX;
+                d.y += centerY;
+            });
+
+            // Compute the new tree layout
+            const nodes = treeData2.descendants();
+            const links = treeData2.links();
+
+            // Declare the links with enhanced styling
+            const link = svg.selectAll(".link")
+                .data(links)
+                .enter().append("path")
+                .attr("class", "link")
+                .attr("d", d3.linkVertical()
+                    .x(d => d.x)
+                    .y(d => d.y))
+                .style("fill", "none")
+                .style("stroke", "#3b82f6")
+                .style("stroke-width", 2.5)
+                .style("stroke-opacity", 0.8)
+                .style("z-index", "1");
+
+            // Declare the nodes
+            const node = svg.selectAll(".node")
+                .data(nodes)
+                .enter().append("g")
+                .attr("class", "node")
+                .attr("transform", d => `translate(${d.x},${d.y})`)
+                .style("z-index", "10");
+
+            // FIX: Add function to detect scan operations that might need indexes
+            function isScanOperation(operation) {
+                const scanKeywords = [
+                    'TABLE ACCESS FULL', 'SEQUENTIAL SCAN', 'TABLE SCAN', 
+                    'INDEX SCAN', 'BITMAP INDEX SCAN', 'INDEX FAST FULL SCAN',
+                    'CLUSTERED INDEX SCAN', 'NONCLUSTERED INDEX SCAN',
+                    'TABLE ACCESS BY INDEX ROWID', 'INDEX RANGE SCAN'
+                ];
+                return scanKeywords.some(keyword => 
+                    operation.toUpperCase().includes(keyword.toUpperCase())
+                );
+            }
+
+            // FIX: Add function to detect full table scans specifically
+            function isFullTableScan(operation) {
+                const fullScanKeywords = [
+                    'TABLE ACCESS FULL', 'SEQUENTIAL SCAN', 'TABLE SCAN'
+                ];
+                return fullScanKeywords.some(keyword => 
+                    operation.toUpperCase().includes(keyword.toUpperCase())
+                );
+            }
+
+            // Add the circles for the nodes with enhanced styling and sizing
+            node.append("circle")
+                .attr("r", d => {
+                    // Larger circles for performance hotspots and more dynamic sizing
+                    const baseRadius = 22;
+                    if (performanceHotspots.includes(d.data.cost)) {
+                        return baseRadius + 10;
+                    }
+                    if (d.data.cost > maxCost * 0.5) {
+                        return baseRadius + 6;
+                    }
+                    return baseRadius;
+                })
+                .style("fill", d => {
+                    // Enhanced multi-factor color coding
+                    const costFactor = d.data.cost / maxCost;
+                    const timeFactor = d.data.time / maxTime;
+                    const bufferFactor = d.data.buffers && d.data.buffers.shared_read ? d.data.buffers.shared_read / maxBufferReads : 0;
+                    
+                    // Ensure we have valid factors
+                    const validCostFactor = isNaN(costFactor) ? 0 : costFactor;
+                    const validTimeFactor = isNaN(timeFactor) ? 0 : timeFactor;
+                    const validBufferFactor = isNaN(bufferFactor) ? 0 : bufferFactor;
+                    
+                    const totalFactor = Math.max(validCostFactor, validTimeFactor, validBufferFactor);
+                    const colorValue = colorScale(totalFactor * colorDomain);
+                    
+                    return colorValue;
+                })
+                .style("stroke", d => {
+                    // FIX: Add special highlighting for scan operations
+                    if (isFullTableScan(d.data.operation)) {
+                        return "#dc2626"; // Red border for full table scans
+                    }
+                    if (isScanOperation(d.data.operation)) {
+                        return "#f59e0b"; // Orange border for other scans
+                    }
+                    // Enhanced stroke styling
+                    if (performanceHotspots.includes(d.data.cost)) {
+                        return "#1f2937";
+                    }
+                    return d.data.cost === maxCost ? "#1f2937" : "#ffffff";
+                })
+                .style("stroke-width", d => {
+                    // FIX: Thicker border for scan operations
+                    if (isScanOperation(d.data.operation)) {
+                        return 4;
+                    }
+                    if (performanceHotspots.includes(d.data.cost)) {
+                        return 4;
+                    }
+                    return d.data.cost === maxCost ? 3 : 2.5;
+                })
+                .style("stroke-dasharray", d => {
+                    // FIX: Special pattern for full table scans
+                    if (isFullTableScan(d.data.operation)) {
+                        return "8,4"; // Dashed pattern for full scans
+                    }
+                    // Dashed border for I/O heavy operations
+                    if (d.data.buffers && d.data.buffers.shared_read > 0) {
+                        return "6,6";
+                    }
+                    return "none";
+                })
+                .style("filter", d => {
+                    // FIX: Add glow effect for scan operations
+                    if (isFullTableScan(d.data.operation)) {
+                        return "drop-shadow(0 0 8px rgba(220, 38, 38, 0.6))"; // Red glow for full scans
+                    }
+                    if (isScanOperation(d.data.operation)) {
+                        return "drop-shadow(0 0 6px rgba(245, 158, 11, 0.5))"; // Orange glow for scans
+                    }
+                    // Add shadow for hotspots
+                    if (performanceHotspots.includes(d.data.cost)) {
+                        return "drop-shadow(0 4px 8px rgba(0,0,0,0.3))";
+                    }
+                    return "drop-shadow(0 2px 4px rgba(0,0,0,0.1))";
+                })
+                .style("z-index", "5");
+
+            // IMPROVED function to calculate optimal text position with better branch handling
+            function calculateTextPosition(d, textType) {
+                const baseOffset = 60 * complexityMultiplier; // Reduced for better association
+                const verticalSpacing = {
+                    'operation': 0,
+                    'metrics': 2.0 * complexityMultiplier, // Reduced spacing
+                    'indicators': 4.0 * complexityMultiplier // Reduced spacing
+                };
+                
+                let xOffset = baseOffset;
+                let yOffset = verticalSpacing[textType] || 0;
+                
+                // FIX: IMPROVED side determination for better branch clarity
+                let isLeftSide = false;
+                
+                // For nodes with siblings, place text on opposite sides
+                if (d.parent && d.parent.children) {
+                    const siblings = d.parent.children;
+                    const siblingIndex = siblings.indexOf(d);
+                    const totalSiblings = siblings.length;
+                    
+                    // FIX: Better logic for branching nodes - use opposite sides consistently
+                    if (totalSiblings > 1) {
+                        // For even number of siblings: left, right, left, right...
+                        // For odd number: left, right, center, left, right...
+                        if (totalSiblings === 2) {
+                            // Two siblings: first on left, second on right
+                            isLeftSide = siblingIndex === 0;
+                        } else if (totalSiblings === 3) {
+                            // Three siblings: left, center, right
+                            if (siblingIndex === 0) isLeftSide = true;
+                            else if (siblingIndex === 1) {
+                                // Center sibling: use position-based logic
+                                isLeftSide = d.x < width / 2;
+                            } else isLeftSide = false;
+                        } else {
+                            // More than 3 siblings: alternate sides
+                            isLeftSide = siblingIndex % 2 === 0;
+                        }
+                    } else {
+                        // Single child: use position-based logic
+                        isLeftSide = d.x < width / 2;
+                    }
+                } else {
+                    // Root or nodes without siblings: use position-based logic
+                    isLeftSide = d.x < width / 2;
+                }
+                
+                // Adjust for depth to create better visual hierarchy
+                if (d.depth > 1) {
+                    isLeftSide = !isLeftSide; // Invert for deeper levels
+                }
+                
+                if (isLeftSide) {
+                    xOffset = -xOffset;
+                }
+                
+                // Reduced randomness for more predictable positioning
+                const randomOffset = (Math.random() - 0.5) * 2; // Reduced randomness
+                yOffset += randomOffset;
+                
+                // Improved depth offset with better spacing
+                const depthOffset = d.depth * 1.0; // Reduced for tighter grouping
+                yOffset += depthOffset;
+                
+                // Enhanced sibling offset to prevent overlaps
+                if (d.parent && d.parent.children) {
+                    const siblingIndex = d.parent.children.indexOf(d);
+                    const totalSiblings = d.parent.children.length;
+                    if (totalSiblings > 1) {
+                        const siblingOffset = (siblingIndex - (totalSiblings - 1) / 2) * 0.8; // Reduced for closer positioning
+                        yOffset += siblingOffset;
+                    }
+                }
+                
+                // Additional offset based on text type to prevent overlap between operation and metrics
+                if (textType === 'metrics') {
+                    yOffset += 1.0; // Small additional offset for metrics
+                }
+                
+                return {
+                    x: xOffset,
+                    y: yOffset,
+                    anchor: isLeftSide ? "end" : "start"
+                };
+            }
+
+            // Add connecting lines from nodes to operation labels
+            node.append("line")
+                .attr("class", "text-connector")
+                .attr("x1", 0)
+                .attr("y1", 0)
+                .attr("x2", d => calculateTextPosition(d, 'operation').x)
+                .attr("y2", d => calculateTextPosition(d, 'operation').y * 12) // Convert em to px
+                .style("stroke", "#374151")
+                .style("stroke-width", "2px")
+                .style("stroke-dasharray", "2,2")
+                .style("opacity", "0.8")
+                .style("z-index", "10")
+                .style("pointer-events", "none");
+
+            // Add labels for the nodes with improved spacing and collision avoidance
+            node.append("text")
+                .attr("class", "operation-label")
+                .attr("dy", d => calculateTextPosition(d, 'operation').y + "em")
+                .attr("x", d => calculateTextPosition(d, 'operation').x)
+                .style("text-anchor", d => calculateTextPosition(d, 'operation').anchor)
+                .text(d => {
+                    // Truncate long operation names to prevent overlap
+                    const operation = d.data.operation;
+                    return operation.length > 20 ? operation.substring(0, 18) + "..." : operation;
+                })
+                .style("font-size", "12px")
+                .style("font-weight", "600")
+                .style("fill", "#1f2937")
+                .style("text-shadow", "0 2px 4px rgba(255,255,255,0.9)")
+                .style("letter-spacing", "0.2px")
+                .style("dominant-baseline", "middle")
+                .style("z-index", "20")
+                .style("pointer-events", "none");
+
+            // Add enhanced metrics text with better spacing - ALWAYS SHOW METRICS
+            node.append("text")
+                .attr("class", "metrics")
+                .attr("dy", d => calculateTextPosition(d, 'metrics').y + "em")
+                .attr("x", d => calculateTextPosition(d, 'metrics').x)
+                .style("text-anchor", d => calculateTextPosition(d, 'metrics').anchor)
+                .text(d => {
+                    let metrics = [];
+                    // Always show cost if available (for all database engines)
+                    if (d.data.cost !== undefined && d.data.cost !== null) {
+                        metrics.push(`C:${d.data.cost.toFixed(1)}`);
+                    }
+                    // Always show rows if available (for all database engines)
+                    if (d.data.rows !== undefined && d.data.rows !== null) {
+                        metrics.push(`R:${d.data.rows.toLocaleString()}`);
+                    }
+                    // Always show time if available (for all database engines)
+                    if (d.data.time !== undefined && d.data.time !== null && d.data.time > 0) {
+                        metrics.push(`T:${d.data.time.toFixed(1)}ms`);
+                    }
+                    // Show buffers if available (for all database engines)
+                    if (d.data.buffers && d.data.buffers.shared_read > 0) {
+                        metrics.push(`IO:${d.data.buffers.shared_read}`);
+                    }
+                    // Show bytes if available (Oracle specific)
+                    if (d.data.bytes !== undefined && d.data.bytes !== null && d.data.bytes > 0) {
+                        metrics.push(`B:${d.data.bytes.toLocaleString()}`);
+                    }
+                    // If no metrics available, show a placeholder
+                    if (metrics.length === 0) {
+                        metrics.push("No metrics");
+                    }
+                    
+                    const metricsText = metrics.join(" | ");
+                    // Truncate very long metric strings to prevent overlap
+                    return metricsText.length > 40 ? metricsText.substring(0, 37) + "..." : metricsText;
+                })
+                .style("font-size", "10px")
+                .style("fill", "#6b7280")
+                .style("font-weight", "500")
+                .style("text-shadow", "0 2px 4px rgba(255,255,255,0.9)")
+                .style("dominant-baseline", "middle")
+                .style("overflow", "visible")
+                .style("white-space", "normal")
+                .style("z-index", "15")
+                .style("pointer-events", "none");
+
+            // Add performance indicators with improved spacing and positioning
+            node.append("text")
+                .attr("class", "performance-indicators")
+                .attr("dy", d => calculateTextPosition(d, 'indicators').y + "em")
+                .attr("x", d => calculateTextPosition(d, 'indicators').x)
+                .style("text-anchor", d => calculateTextPosition(d, 'indicators').anchor)
+                .text(d => {
+                    let indicators = [];
+                    if (performanceHotspots.includes(d.data.cost)) {
+                        indicators.push("🔥");
+                    }
+                    if (d.data.buffers && d.data.buffers.shared_read > maxBufferReads * 0.5) {
+                        indicators.push("💾");
+                    }
+                    if (d.data.time > maxTime * 0.5) {
+                        indicators.push("⏱️");
+                    }
+                    // FIX: Add scan operation indicators
+                    if (isFullTableScan(d.data.operation)) {
+                        indicators.push("📋"); // Full table scan indicator
+                    } else if (isScanOperation(d.data.operation)) {
+                        indicators.push("🔍"); // General scan indicator
+                    }
+                    const indicatorText = indicators.join("  "); // Double space between indicators
+                    // Only show indicators if there are any to reduce clutter
+                    return indicatorText;
+                })
+                .style("font-size", "11px") // Slightly larger for better visibility
+                .style("fill", "#dc2626")
+                .style("font-weight", "bold")
+                .style("text-shadow", "0 2px 4px rgba(255,255,255,0.9)")
+                .style("dominant-baseline", "middle")
+                .style("z-index", "16") // Higher z-index to ensure visibility
+                .style("pointer-events", "none");
+
+            // Add tooltips with detailed information
+            node.append("title")
+                .text(d => {
+                    let tooltip = `Operation: ${d.data.operation}\n`;
+                    tooltip += `Cost: ${d.data.cost.toFixed(2)}\n`;
+                    tooltip += `Rows: ${d.data.rows.toLocaleString()}\n`;
+                    if (d.data.time > 0) tooltip += `Time: ${d.data.time.toFixed(2)}ms\n`;
+                    if (d.data.buffers) {
+                        if (d.data.buffers.shared_hit) tooltip += `Buffer Hits: ${d.data.buffers.shared_hit}\n`;
+                        if (d.data.buffers.shared_read) tooltip += `Buffer Reads: ${d.data.buffers.shared_read}\n`;
+                        if (d.data.buffers.shared_written) tooltip += `Buffer Writes: ${d.data.buffers.shared_written}\n`;
+                    }
+                    if (d.data.filter) tooltip += `Filter: ${d.data.filter}\n`;
+                    if (d.data.join_condition) tooltip += `Join: ${d.data.join_condition}\n`;
+                    if (performanceHotspots.includes(d.data.cost)) tooltip += `\n🔥 Performance Hotspot`;
+                    // FIX: Add scan operation warnings
+                    if (isFullTableScan(d.data.operation)) {
+                        tooltip += `\n📋 Full Table Scan - Consider adding indexes for better performance`;
+                    } else if (isScanOperation(d.data.operation)) {
+                        tooltip += `\n🔍 Scan Operation - Review index usage`;
+                    }
+                    return tooltip;
+                });
+
+            // Create legend in a separate container outside the main visualization
+            const legendContainer = d3.select(container).append("div")
+                .style("position", "absolute")
+                .style("bottom", "80px") // Moved to bottom to avoid blocking view
+                .style("right", "20px")
+                .style("width", "280px")
+                .style("background", "rgba(255, 255, 255, 0.95)")
+                .style("border", "2px solid #e5e7eb")
+                .style("border-radius", "12px")
+                .style("padding", "15px")
+                .style("box-shadow", "0 8px 32px rgba(0, 0, 0, 0.1)")
+                .style("z-index", "100")
+                .style("backdrop-filter", "blur(10px)")
+                .style("max-height", "300px") // Limit height
+                .style("overflow-y", "auto"); // Make scrollable if needed
+
+            // Legend title
+            legendContainer.append("div")
+                .style("font-size", "16px")
+                .style("font-weight", "bold")
+                .style("color", "#1f2937")
+                .style("margin-bottom", "12px")
+                .style("text-align", "center")
+                .text("Performance Legend");
+
+            // Performance levels
+            legendContainer.append("div")
+                .style("font-size", "14px")
+                .style("font-weight", "600")
+                .style("color", "#374151")
+                .style("margin-bottom", "8px")
+                .text("Performance Levels:");
+
+            const performanceLevels = [
+                { color: "#10b981", label: "Low Cost/Time" },
+                { color: "#f59e0b", label: "Medium Cost/Time" },
+                { color: "#ef4444", label: "High Cost/Time" }
+            ];
+
+            performanceLevels.forEach((item, i) => {
+                const legendItem = legendContainer.append("div")
+                    .style("display", "flex")
+                    .style("align-items", "center")
+                    .style("margin-bottom", "6px");
+
+                legendItem.append("div")
+                    .style("width", "16px")
+                    .style("height", "16px")
+                    .style("border-radius", "50%")
+                    .style("background", item.color)
+                    .style("border", "2px solid #ffffff")
+                    .style("margin-right", "10px")
+                    .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)");
+
+                legendItem.append("span")
+                    .style("font-size", "12px")
+                    .style("color", "#374151")
+                    .text(item.label);
+            });
+
+            // Add operation type indicators
+            legendContainer.append("div")
+                .style("font-size", "14px")
+                .style("font-weight", "600")
+                .style("color", "#374151")
+                .style("margin-top", "15px")
+                .style("margin-bottom", "8px")
+                .text("Operation Types:");
+
+            const operationTypes = [
+                { pattern: "none", label: "CPU Operations" },
+                { pattern: "6,6", label: "I/O Operations" }
+            ];
+
+            operationTypes.forEach((item, i) => {
+                const legendItem = legendContainer.append("div")
+                    .style("display", "flex")
+                    .style("align-items", "center")
+                    .style("margin-bottom", "6px");
+
+                legendItem.append("div")
+                    .style("width", "16px")
+                    .style("height", "16px")
+                    .style("border-radius", "50%")
+                    .style("background", "#3b82f6")
+                    .style("border", "2px solid #ffffff")
+                    .style("border-style", item.pattern === "none" ? "solid" : "dashed")
+                    .style("margin-right", "10px")
+                    .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)");
+
+                legendItem.append("span")
+                    .style("font-size", "12px")
+                    .style("color", "#374151")
+                    .text(item.label);
+            });
+
+            // Add performance indicators section
+            legendContainer.append("div")
+                .style("font-size", "14px")
+                .style("font-weight", "600")
+                .style("color", "#374151")
+                .style("margin-top", "15px")
+                .style("margin-bottom", "8px")
+                .text("Performance Indicators:");
+
+            const indicators = [
+                { symbol: "🔥", label: "Performance Hotspot" },
+                { symbol: "💾", label: "I/O Heavy Operation" },
+                { symbol: "⏱️", label: "Slow Operation" },
+                { symbol: "📋", label: "Full Table Scan (Needs Index)" },
+                { symbol: "🔍", label: "Scan Operation (Review Index)" }
+            ];
+
+            indicators.forEach((item, i) => {
+                const legendItem = legendContainer.append("div")
+                    .style("display", "flex")
+                    .style("align-items", "center")
+                    .style("margin-bottom", "6px");
+
+                legendItem.append("span")
+                    .style("font-size", "12px")
+                    .style("color", "#dc2626")
+                    .style("font-weight", "bold")
+                    .style("margin-right", "10px")
+                    .text(item.symbol);
+
+                legendItem.append("span")
+                    .style("font-size", "12px")
+                    .style("color", "#374151")
+                    .text(item.label);
+            });
+
+            // Add visualization controls
+            addVisualizationControls(vizContainer, container);
+        }
+
+        // Compact visualization for complex plans (≥16 nodes)
+        function renderCompactTree(treeData, container) {
+            // Calculate plan complexity
+            const planComplexity = calculatePlanComplexity(treeData);
+            
+            // Set dimensions optimized for complex plans
+            const baseMargin = {top: 60, right: 300, bottom: 80, left: 300};
+            const complexityMultiplier = Math.max(1, planComplexity / 25); // Less aggressive scaling
+            
+            const margin = {
+                top: baseMargin.top * complexityMultiplier,
+                right: baseMargin.right * complexityMultiplier,
+                bottom: baseMargin.bottom * complexityMultiplier,
+                left: baseMargin.left * complexityMultiplier
+            };
     
-    function exportToSVG(svgNode) {
-        // Get the full SVG dimensions including all content
-        const bbox = svgNode.getBBox();
-        const extraTop = 60;
-        const extraBottom = 200; // extra margin for performance summary
-        const fullWidth = bbox.width + margin.left + margin.right;
-        const fullHeight = bbox.height + margin.top + margin.bottom + extraTop + extraBottom;
-        
-        // Create a temporary SVG with the full dimensions
-        const tempSvg = svgNode.cloneNode(true);
-        tempSvg.setAttribute('width', fullWidth);
-        tempSvg.setAttribute('height', fullHeight);
-        tempSvg.setAttribute('viewBox', `0 0 ${fullWidth} ${fullHeight}`);
-        tempSvg.setAttribute('style', `background:white`);
-        
-        // Move all content down by extraTop
-        const g = tempSvg.querySelector('g');
-        if (g) {
-            const oldTransform = g.getAttribute('transform') || '';
-            g.setAttribute('transform', `translate(${margin.left},${margin.top + extraTop})`);
+            const width = Math.max(container.clientWidth - margin.right - margin.left, 1600);
+            const height = Math.max(1400 - margin.top - margin.bottom, 1000);
+
+            // Clear container
+            container.innerHTML = '';
+
+            // Create main visualization container with proper containment
+            const vizContainer = d3.select(container).append("div")
+                .style("position", "relative")
+                .style("width", "100%")
+                .style("height", "100%")
+                .style("border-radius", "8px")
+                .style("background", "#ffffff")
+                .style("border", "2px solid #e5e7eb")
+                .style("overflow", "hidden"); // FIX: Add overflow hidden to prevent dragging outside
+
+            // Create SVG with larger dimensions for complex plans
+            const svg = vizContainer.append("svg")
+                .attr("width", width + margin.right + margin.left)
+                .attr("height", height + margin.top + margin.bottom)
+                .style("overflow", "visible")
+                .append("g")
+                .attr("transform", `translate(${margin.left},${margin.top})`);
+
+            // Add zoom behavior with proper containment - FIX: Add translateExtent to constrain dragging
+            const zoom = d3.zoom()
+                .scaleExtent([0.2, 5])
+                .translateExtent([[0, 0], [width + margin.right + margin.left, height + margin.top + margin.bottom]]) // FIX: Constrain dragging
+                .on("zoom", (event) => {
+                    svg.attr("transform", event.transform);
+                });
+
+            vizContainer.select("svg").call(zoom);
+
+            // Use the tree data directly from backend
+            const root = d3.hierarchy(treeData, d => d.children);
+            
+            // Calculate performance metrics for color coding
+            let maxCost = 0;
+            let maxTime = 0;
+            let maxBufferReads = 0;
+            let performanceHotspots = [];
+            
+            root.each(d => {
+                if (d.data.cost > maxCost) maxCost = d.data.cost;
+                if (d.data.time > maxTime) maxTime = d.data.time;
+                if (d.data.buffers && d.data.buffers.shared_read > maxBufferReads) {
+                    maxBufferReads = d.data.buffers.shared_read;
+                }
+            });
+            
+            // Ensure we have minimum values for color scale calculation
+            if (maxCost === 0) maxCost = 1;
+            if (maxTime === 0) maxTime = 1;
+            if (maxBufferReads === 0) maxBufferReads = 1;
+            
+            // Identify performance hotspots (top 15% by cost for complex plans)
+            const allNodes = root.descendants().filter(d => d.data.cost > 0);
+            allNodes.sort((a, b) => b.data.cost - a.data.cost);
+            const hotspotCount = Math.max(1, Math.floor(allNodes.length * 0.15));
+            performanceHotspots = allNodes.slice(0, hotspotCount).map(d => d.data.cost);
+            
+            // FIX: Add function to detect scan operations that might need indexes
+            function isScanOperation(operation) {
+                const scanKeywords = [
+                    'TABLE ACCESS FULL', 'SEQUENTIAL SCAN', 'TABLE SCAN', 
+                    'INDEX SCAN', 'BITMAP INDEX SCAN', 'INDEX FAST FULL SCAN',
+                    'CLUSTERED INDEX SCAN', 'NONCLUSTERED INDEX SCAN',
+                    'TABLE ACCESS BY INDEX ROWID', 'INDEX RANGE SCAN'
+                ];
+                return scanKeywords.some(keyword => 
+                    operation.toUpperCase().includes(keyword.toUpperCase())
+                );
+            }
+
+            // FIX: Add function to detect full table scans specifically
+            function isFullTableScan(operation) {
+                const fullScanKeywords = [
+                    'TABLE ACCESS FULL', 'SEQUENTIAL SCAN', 'TABLE SCAN'
+                ];
+                return fullScanKeywords.some(keyword => 
+                    operation.toUpperCase().includes(keyword.toUpperCase())
+                );
+            }
+            
+            // Enhanced color scale
+            const colorDomain = Math.max(maxCost, maxTime * 100, maxBufferReads * 10);
+
+            const colorScale = d3.scaleLinear()
+                .domain([0, colorDomain])
+                .range(["#10b981", "#f59e0b", "#ef4444"]);
+
+            // Compact separation for complex plans
+            const baseSeparation = 2.0;
+            const separationMultiplier = Math.max(1, planComplexity / 20);
+            
+            const tree = d3.tree().size([width, height]).separation((a, b) => {
+                const separation = baseSeparation * separationMultiplier;
+                return (a.parent === b.parent ? separation : separation * 1.1);
+            });
+
+            // Assigns the data to a hierarchy using parent-child relationships
+            const treeData2 = tree(root);
+
+            // CENTER THE TREE BY DEFAULT
+            const treeBounds = treeData2.descendants().reduce((bounds, d) => {
+                bounds.x0 = Math.min(bounds.x0, d.x);
+                bounds.x1 = Math.max(bounds.x1, d.x);
+                bounds.y0 = Math.min(bounds.y0, d.y);
+                bounds.y1 = Math.max(bounds.y1, d.y);
+                return bounds;
+            }, {x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity});
+
+            // Calculate centering transform
+            const treeWidth = treeBounds.x1 - treeBounds.x0;
+            const treeHeight = treeBounds.y1 - treeBounds.y0;
+            const centerX = (width - treeWidth) / 2 - treeBounds.x0;
+            const centerY = (height - treeHeight) / 2 - treeBounds.y0;
+
+            // Apply centering transform to all nodes
+            treeData2.descendants().forEach(d => {
+                d.x += centerX;
+                d.y += centerY;
+            });
+
+            // Compute the new tree layout
+            const nodes = treeData2.descendants();
+            const links = treeData2.links();
+
+            // Declare the links with enhanced styling
+            const link = svg.selectAll(".link")
+                .data(links)
+                .enter().append("path")
+                .attr("class", "link")
+                .attr("d", d3.linkVertical()
+                    .x(d => d.x)
+                    .y(d => d.y))
+                .style("fill", "none")
+                .style("stroke", "#3b82f6")
+                .style("stroke-width", 2)
+                .style("stroke-opacity", 0.7)
+                .style("z-index", "1");
+
+            // Declare the nodes
+            const node = svg.selectAll(".node")
+                .data(nodes)
+                .enter().append("g")
+                .attr("class", "node")
+                .attr("transform", d => `translate(${d.x},${d.y})`)
+                .style("z-index", "10");
+
+            // Add the circles for the nodes with compact sizing
+            node.append("circle")
+                .attr("r", d => {
+                    // Smaller circles for compact mode
+                    const baseRadius = 18;
+                    if (performanceHotspots.includes(d.data.cost)) {
+                        return baseRadius + 8;
+                    }
+                    if (d.data.cost > maxCost * 0.5) {
+                        return baseRadius + 4;
+                    }
+                    return baseRadius;
+                })
+                .style("fill", d => {
+                    // Enhanced multi-factor color coding
+                    const costFactor = d.data.cost / maxCost;
+                    const timeFactor = d.data.time / maxTime;
+                    const bufferFactor = d.data.buffers && d.data.buffers.shared_read ? d.data.buffers.shared_read / maxBufferReads : 0;
+                    
+                    // Ensure we have valid factors
+                    const validCostFactor = isNaN(costFactor) ? 0 : costFactor;
+                    const validTimeFactor = isNaN(timeFactor) ? 0 : timeFactor;
+                    const validBufferFactor = isNaN(bufferFactor) ? 0 : bufferFactor;
+                    
+                    const totalFactor = Math.max(validCostFactor, validTimeFactor, validBufferFactor);
+                    const colorValue = colorScale(totalFactor * colorDomain);
+                    
+                    return colorValue;
+                })
+                .style("stroke", d => {
+                    // FIX: Add special highlighting for scan operations
+                    if (isFullTableScan(d.data.operation)) {
+                        return "#dc2626"; // Red border for full table scans
+                    }
+                    if (isScanOperation(d.data.operation)) {
+                        return "#f59e0b"; // Orange border for other scans
+                    }
+                    if (performanceHotspots.includes(d.data.cost)) {
+                        return "#1f2937";
+                    }
+                    return d.data.cost === maxCost ? "#1f2937" : "#ffffff";
+                })
+                .style("stroke-width", d => {
+                    // FIX: Thicker border for scan operations
+                    if (isScanOperation(d.data.operation)) {
+                        return 3;
+                    }
+                    if (performanceHotspots.includes(d.data.cost)) {
+                        return 3;
+                    }
+                    return d.data.cost === maxCost ? 2.5 : 2;
+                })
+                .style("stroke-dasharray", d => {
+                    // FIX: Special pattern for full table scans
+                    if (isFullTableScan(d.data.operation)) {
+                        return "6,3"; // Dashed pattern for full scans
+                    }
+                    if (d.data.buffers && d.data.buffers.shared_read > 0) {
+                        return "4,4";
+                    }
+                    return "none";
+                })
+                .style("filter", d => {
+                    // FIX: Add glow effect for scan operations
+                    if (isFullTableScan(d.data.operation)) {
+                        return "drop-shadow(0 0 6px rgba(220, 38, 38, 0.5))"; // Red glow for full scans
+                    }
+                    if (isScanOperation(d.data.operation)) {
+                        return "drop-shadow(0 0 4px rgba(245, 158, 11, 0.4))"; // Orange glow for scans
+                    }
+                    if (performanceHotspots.includes(d.data.cost)) {
+                        return "drop-shadow(0 3px 6px rgba(0,0,0,0.3))";
+                    }
+                    return "drop-shadow(0 1px 3px rgba(0,0,0,0.1))";
+                })
+                .style("z-index", "5");
+
+                    // FIX: IMPROVED compact text positioning function with better branch handling
+        function calculateCompactTextPosition(d, textType) {
+            const baseOffset = 25 * complexityMultiplier; // Reduced for better association
+            const verticalSpacing = {
+                'operation': 0,
+                'metrics': 1.0 * complexityMultiplier, // Reduced spacing
+                'indicators': 2.5 * complexityMultiplier // Reduced spacing
+            };
+            
+            let xOffset = baseOffset;
+            let yOffset = verticalSpacing[textType] || 0;
+            
+            // FIX: IMPROVED side determination for better branch clarity
+            let isLeftSide = false;
+            
+            // For nodes with siblings, place text on opposite sides
+            if (d.parent && d.parent.children) {
+                const siblings = d.parent.children;
+                const siblingIndex = siblings.indexOf(d);
+                const totalSiblings = siblings.length;
+                
+                // FIX: Better logic for branching nodes - use opposite sides consistently
+                if (totalSiblings > 1) {
+                    // For even number of siblings: left, right, left, right...
+                    // For odd number: left, right, center, left, right...
+                    if (totalSiblings === 2) {
+                        // Two siblings: first on left, second on right
+                        isLeftSide = siblingIndex === 0;
+                    } else if (totalSiblings === 3) {
+                        // Three siblings: left, center, right
+                        if (siblingIndex === 0) isLeftSide = true;
+                        else if (siblingIndex === 1) {
+                            // Center sibling: use position-based logic
+                            isLeftSide = d.x < width / 2;
+                        } else isLeftSide = false;
+                    } else {
+                        // More than 3 siblings: alternate sides
+                        isLeftSide = siblingIndex % 2 === 0;
+                    }
+                } else {
+                    // Single child: use position-based logic
+                    isLeftSide = d.x < width / 2;
+                }
+            } else {
+                // Root or nodes without siblings: use position-based logic
+                isLeftSide = d.x < width / 2;
+            }
+            
+            // Adjust for depth to create better visual hierarchy
+            if (d.depth > 1) {
+                isLeftSide = !isLeftSide; // Invert for deeper levels
+            }
+            
+            if (isLeftSide) {
+                xOffset = -xOffset;
+            }
+            
+            // Reduced randomness for more predictable positioning
+            const randomOffset = (Math.random() - 0.5) * 0.5; // Further reduced randomness
+            yOffset += randomOffset;
+            
+            // Improved depth offset with better spacing
+            const depthOffset = d.depth * 0.5; // Reduced for tighter grouping
+            yOffset += depthOffset;
+            
+            // Enhanced sibling offset to prevent overlaps
+            if (d.parent && d.parent.children) {
+                const siblingIndex = d.parent.children.indexOf(d);
+                const totalSiblings = d.parent.children.length;
+                if (totalSiblings > 1) {
+                    const siblingOffset = (siblingIndex - (totalSiblings - 1) / 2) * 0.3; // Reduced for closer positioning
+                    yOffset += siblingOffset;
+                }
+            }
+            
+            // Additional offset based on text type to prevent overlap between operation and metrics
+            if (textType === 'metrics') {
+                yOffset += 0.5; // Small additional offset for metrics
+            }
+            
+            return {
+                x: xOffset,
+                y: yOffset,
+                anchor: isLeftSide ? "end" : "start",
+                isLeftSide: isLeftSide
+            };
+        }
+
+            // Enhanced connecting line - closer and more visible
+            node.append("line")
+                .attr("class", "text-connector")
+                .attr("x1", 0)
+                .attr("y1", 0)
+                .attr("x2", d => calculateCompactTextPosition(d, 'operation').x)
+                .attr("y2", d => calculateCompactTextPosition(d, 'operation').y * 12)
+                .style("stroke", "#374151")
+                .style("stroke-width", "2px") // Thicker line for better visibility
+                .style("stroke-dasharray", "2,2") // Smaller dash pattern
+                .style("opacity", "0.8") // Higher opacity for better visibility
+                .style("z-index", "10")
+                .style("pointer-events", "none");
+
+            // Simplified operation labels with cleaner styling
+            node.append("text")
+                .attr("class", "operation-label-compact")
+                .attr("dy", d => calculateCompactTextPosition(d, 'operation').y + "em")
+                .attr("x", d => calculateCompactTextPosition(d, 'operation').x)
+                .style("text-anchor", d => calculateCompactTextPosition(d, 'operation').anchor)
+                .text(d => {
+                    // More aggressive truncation for cleaner look
+                    const operation = d.data.operation;
+                    return operation.length > 15 ? operation.substring(0, 12) + "..." : operation;
+                })
+                .style("font-size", "10px") // Smaller font
+                .style("font-weight", "600")
+                .style("fill", "#1f2937")
+                .style("dominant-baseline", "middle")
+                .style("z-index", "20")
+                .style("pointer-events", "none")
+                .style("background", "rgba(255,255,255,0.9)") // Lighter background
+                .style("padding", "2px 4px") // Smaller padding
+                .style("border-radius", "3px")
+                .style("border", "1px solid rgba(107, 114, 128, 0.15)");
+
+            // Metrics text without indicators (separated for better clarity)
+            node.append("text")
+                .attr("class", "metrics-compact")
+                .attr("dy", d => calculateCompactTextPosition(d, 'metrics').y + "em")
+                .attr("x", d => calculateCompactTextPosition(d, 'metrics').x)
+                .style("text-anchor", d => calculateCompactTextPosition(d, 'metrics').anchor)
+                .text(d => {
+                    let metrics = [];
+                    
+                    // Build metrics string (for all database engines)
+                    if (d.data.cost !== undefined && d.data.cost !== null) {
+                        metrics.push(`C:${d.data.cost.toFixed(1)}`);
+                    }
+                    if (d.data.rows !== undefined && d.data.rows !== null) {
+                        metrics.push(`R:${d.data.rows.toLocaleString()}`);
+                    }
+                    if (d.data.time !== undefined && d.data.time !== null && d.data.time > 0) {
+                        metrics.push(`T:${d.data.time.toFixed(1)}`);
+                    }
+                    if (d.data.buffers && d.data.buffers.shared_read > 0) {
+                        metrics.push(`IO:${d.data.buffers.shared_read}`);
+                    }
+                    // Show bytes if available (Oracle specific)
+                    if (d.data.bytes !== undefined && d.data.bytes !== null && d.data.bytes > 0) {
+                        metrics.push(`B:${d.data.bytes.toLocaleString()}`);
+                    }
+                    
+                    return metrics.join(" | ");
+                })
+                .style("font-size", "8px") // Smaller font
+                .style("fill", "#6b7280")
+                .style("font-weight", "500")
+                .style("dominant-baseline", "middle")
+                .style("z-index", "15")
+                .style("pointer-events", "none")
+                .style("background", "rgba(255,255,255,0.85)")
+                .style("padding", "1px 3px")
+                .style("border-radius", "2px")
+                .style("border", "1px solid rgba(107, 114, 128, 0.1)");
+
+            // Separate performance indicators with proper spacing
+            node.append("text")
+                .attr("class", "performance-indicators-compact")
+                .attr("dy", d => calculateCompactTextPosition(d, 'indicators').y + "em")
+                .attr("x", d => calculateCompactTextPosition(d, 'indicators').x)
+                .style("text-anchor", d => calculateCompactTextPosition(d, 'indicators').anchor)
+                .text(d => {
+                    let indicators = [];
+                    
+                    // Collect indicators with proper spacing
+                    if (performanceHotspots.includes(d.data.cost)) {
+                        indicators.push("🔥");
+                    }
+                    if (d.data.buffers && d.data.buffers.shared_read > maxBufferReads * 0.5) {
+                        indicators.push("💾");
+                    }
+                    if (d.data.time > maxTime * 0.5) {
+                        indicators.push("⏱️");
+                    }
+                    // FIX: Add scan operation indicators
+                    if (isFullTableScan(d.data.operation)) {
+                        indicators.push("📋"); // Full table scan indicator
+                    } else if (isScanOperation(d.data.operation)) {
+                        indicators.push("🔍"); // General scan indicator
+                    }
+                    
+                    return indicators.join("  "); // Double space between indicators
+                })
+                .style("font-size", "10px") // Slightly larger for better visibility
+                .style("fill", "#dc2626")
+                .style("font-weight", "bold")
+                .style("dominant-baseline", "middle")
+                .style("z-index", "16") // Higher z-index to ensure visibility
+                .style("pointer-events", "none")
+                .style("text-shadow", "0 1px 2px rgba(255,255,255,0.9)");
+
+            // Simplified hotspot indicator - only for the most critical nodes
+            node.filter(d => {
+                return performanceHotspots.includes(d.data.cost) && d.data.cost > maxCost * 0.8; // Only top 20% of hotspots
+            })
+            .append("circle")
+                .attr("r", d => 22 + (d.data.cost / maxCost) * 3) // Smaller glow
+                .style("fill", "none")
+                .style("stroke", "#dc2626")
+                .style("stroke-width", "1.5px") // Thinner stroke
+                .style("stroke-dasharray", "4,4") // Smaller dash pattern
+                .style("opacity", "0.4") // Lower opacity
+                .style("z-index", "1")
+                .style("pointer-events", "none");
+
+
+
+            // Add comprehensive tooltips with all metrics for compact mode
+            node.append("title")
+                .text(d => {
+                    let tooltip = `Operation: ${d.data.operation}\n`;
+                    tooltip += `Cost: ${d.data.cost.toFixed(2)}\n`;
+                    tooltip += `Rows: ${d.data.rows.toLocaleString()}\n`;
+                    if (d.data.time > 0) tooltip += `Time: ${d.data.time.toFixed(2)}ms\n`;
+                    if (d.data.buffers) {
+                        if (d.data.buffers.shared_hit) tooltip += `Buffer Hits: ${d.data.buffers.shared_hit}\n`;
+                        if (d.data.buffers.shared_read) tooltip += `Buffer Reads: ${d.data.buffers.shared_read}\n`;
+                        if (d.data.buffers.shared_written) tooltip += `Buffer Writes: ${d.data.buffers.shared_written}\n`;
+                    }
+                    if (d.data.filter) tooltip += `Filter: ${d.data.filter}\n`;
+                    if (d.data.join_condition) tooltip += `Join: ${d.data.join_condition}\n`;
+                    if (performanceHotspots.includes(d.data.cost)) tooltip += `\n🔥 Performance Hotspot`;
+                    if (d.data.buffers && d.data.buffers.shared_read > maxBufferReads * 0.5) tooltip += `\n💾 I/O Heavy`;
+                    if (d.data.time > maxTime * 0.5) tooltip += `\n⏱️ Slow Operation`;
+                    // FIX: Add scan operation warnings
+                    if (isFullTableScan(d.data.operation)) {
+                        tooltip += `\n📋 Full Table Scan - Consider adding indexes for better performance`;
+                    } else if (isScanOperation(d.data.operation)) {
+                        tooltip += `\n🔍 Scan Operation - Review index usage`;
+                    }
+                    return tooltip;
+                });
+
+            // Create compact legend
+            const legendContainer = d3.select(container).append("div")
+                .style("position", "absolute")
+                .style("bottom", "80px") // Moved to bottom to avoid blocking view
+                .style("right", "20px")
+                .style("width", "250px")
+                .style("background", "rgba(255, 255, 255, 0.95)")
+                .style("border", "2px solid #e5e7eb")
+                .style("border-radius", "10px")
+                .style("padding", "12px")
+                .style("box-shadow", "0 6px 24px rgba(0, 0, 0, 0.1)")
+                .style("z-index", "100")
+                .style("backdrop-filter", "blur(10px)")
+                .style("max-height", "250px") // Limit height
+                .style("overflow-y", "auto"); // Make scrollable if needed
+
+            // Legend title
+            legendContainer.append("div")
+                .style("font-size", "14px")
+                .style("font-weight", "bold")
+                .style("color", "#1f2937")
+                .style("margin-bottom", "10px")
+                .style("text-align", "center")
+                .text("Performance Legend");
+
+            // Performance levels
+            legendContainer.append("div")
+                .style("font-size", "12px")
+                .style("font-weight", "600")
+                .style("color", "#374151")
+                .style("margin-bottom", "6px")
+                .text("Performance Levels:");
+
+            const performanceLevels = [
+                { color: "#10b981", label: "Low Cost/Time" },
+                { color: "#f59e0b", label: "Medium Cost/Time" },
+                { color: "#ef4444", label: "High Cost/Time" }
+            ];
+
+            performanceLevels.forEach((item, i) => {
+                const legendItem = legendContainer.append("div")
+                    .style("display", "flex")
+                    .style("align-items", "center")
+                    .style("margin-bottom", "4px");
+
+                legendItem.append("div")
+                    .style("width", "12px")
+                    .style("height", "12px")
+                    .style("border-radius", "50%")
+                    .style("background", item.color)
+                    .style("border", "1px solid #ffffff")
+                    .style("margin-right", "8px")
+                    .style("box-shadow", "0 1px 3px rgba(0,0,0,0.1)");
+
+                legendItem.append("span")
+                    .style("font-size", "10px")
+                    .style("color", "#374151")
+                    .text(item.label);
+            });
+
+            // Add operation type indicators
+            legendContainer.append("div")
+                .style("font-size", "12px")
+                .style("font-weight", "600")
+                .style("color", "#374151")
+                .style("margin-top", "10px")
+                .style("margin-bottom", "6px")
+                .text("Operation Types:");
+
+            const operationTypes = [
+                { pattern: "none", label: "CPU Operations" },
+                { pattern: "4,4", label: "I/O Operations" }
+            ];
+
+            operationTypes.forEach((item, i) => {
+                const legendItem = legendContainer.append("div")
+                    .style("display", "flex")
+                    .style("align-items", "center")
+                    .style("margin-bottom", "4px");
+
+                legendItem.append("div")
+                    .style("width", "12px")
+                    .style("height", "12px")
+                    .style("border-radius", "50%")
+                    .style("background", "#3b82f6")
+                    .style("border", "1px solid #ffffff")
+                    .style("border-style", item.pattern === "none" ? "solid" : "dashed")
+                    .style("margin-right", "8px")
+                    .style("box-shadow", "0 1px 3px rgba(0,0,0,0.1)");
+
+                legendItem.append("span")
+                    .style("font-size", "10px")
+                    .style("color", "#374151")
+                    .text(item.label);
+            });
+
+            // Add performance indicators section
+            legendContainer.append("div")
+                .style("font-size", "12px")
+                .style("font-weight", "600")
+                .style("color", "#374151")
+                .style("margin-top", "10px")
+                .style("margin-bottom", "6px")
+                .text("Performance Indicators:");
+
+            const indicators = [
+                { symbol: "🔥", label: "Performance Hotspot" },
+                { symbol: "💾", label: "I/O Heavy Operation" },
+                { symbol: "⏱️", label: "Slow Operation" },
+                { symbol: "📋", label: "Full Table Scan (Needs Index)" },
+                { symbol: "🔍", label: "Scan Operation (Review Index)" }
+            ];
+
+            indicators.forEach((item, i) => {
+                const legendItem = legendContainer.append("div")
+                    .style("display", "flex")
+                    .style("align-items", "center")
+                    .style("margin-bottom", "4px");
+
+                legendItem.append("span")
+                    .style("font-size", "10px")
+                    .style("color", "#dc2626")
+                    .style("font-weight", "bold")
+                    .style("margin-right", "8px")
+                    .text(item.symbol);
+
+                legendItem.append("span")
+                    .style("font-size", "10px")
+                    .style("color", "#374151")
+                    .text(item.label);
+            });
+
+            // Add visualization controls
+            addVisualizationControls(vizContainer, container);
+        }
+
+        // Helper function to add visualization controls
+        function addVisualizationControls(vizContainer, container) {
+            // Create controls container
+            const controlsContainer = d3.select(container).append("div")
+                .style("position", "absolute")
+                .style("bottom", "20px")
+                .style("left", "20px")
+                .style("z-index", "1000")
+                .style("display", "flex")
+                .style("gap", "8px")
+                .style("flex-wrap", "wrap")
+                .style("background", "rgba(255, 255, 255, 0.95)")
+                .style("padding", "8px")
+                .style("border-radius", "6px")
+                .style("box-shadow", "0 2px 8px rgba(0,0,0,0.1)")
+                .style("border", "1px solid rgba(0,0,0,0.1)");
+
+            // Fit to Screen button
+            controlsContainer.append("button")
+                .attr("type", "button")
+                .attr("class", "btn btn-outline-primary btn-sm")
+                .style("font-size", "11px")
+                .style("padding", "4px 8px")
+                .style("border-radius", "6px")
+                .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)")
+                .text("Fit to Screen")
+                .on("click", function(event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const svg = vizContainer.select("svg");
+                    const zoom = d3.zoom().on("zoom", (event) => {
+                        svg.select("g").attr("transform", event.transform);
+                    });
+                    svg.call(zoom.transform, d3.zoomIdentity);
+                });
+
+            // Zoom In button
+            controlsContainer.append("button")
+                .attr("type", "button")
+                .attr("class", "btn btn-outline-primary btn-sm")
+                .style("font-size", "11px")
+                .style("padding", "4px 8px")
+                .style("border-radius", "6px")
+                .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)")
+                .text("Zoom In")
+                .on("click", function(event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const svg = vizContainer.select("svg");
+                    const zoom = d3.zoom().on("zoom", (event) => {
+                        svg.select("g").attr("transform", event.transform);
+                    });
+                    svg.call(zoom.scaleBy, 1.5);
+                });
+
+            // Zoom Out button
+            controlsContainer.append("button")
+                .attr("type", "button")
+                .attr("class", "btn btn-outline-primary btn-sm")
+                .style("font-size", "11px")
+                .style("padding", "4px 8px")
+                .style("border-radius", "6px")
+                .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)")
+                .text("Zoom Out")
+                .on("click", function(event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const svg = vizContainer.select("svg");
+                    const zoom = d3.zoom().on("zoom", (event) => {
+                        svg.select("g").attr("transform", event.transform);
+                    });
+                    svg.call(zoom.scaleBy, 0.75);
+                });
+
+            // Export PNG button
+            controlsContainer.append("button")
+                .attr("type", "button")
+                .attr("class", "btn btn-outline-success btn-sm")
+                .style("font-size", "11px")
+                .style("padding", "4px 8px")
+                .style("border-radius", "6px")
+                .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)")
+                .text("Export PNG")
+                .on("click", function(event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    exportToPNG(vizContainer);
+                });
+
+            // Export SVG button
+            controlsContainer.append("button")
+                .attr("type", "button")
+                .attr("class", "btn btn-outline-success btn-sm")
+                .style("font-size", "11px")
+                .style("padding", "4px 8px")
+                .style("border-radius", "6px")
+                .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)")
+                .text("Export SVG")
+                .on("click", function(event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    exportToSVG(vizContainer);
+                });
+        }
+
+// Export functions for visualization controls
+function exportToPNG(vizContainer) {
+    try {
+        const svg = vizContainer.select("svg").node();
+        if (!svg) {
+            console.error('SVG element not found');
+            return;
         }
         
-        const serializer = new XMLSerializer();
-        const svgStr = serializer.serializeToString(tempSvg);
-        const blob = new Blob([svgStr], {type: "image/svg+xml"});
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
+        // Create a canvas to convert SVG to PNG
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Get SVG dimensions
+        const svgRect = svg.getBoundingClientRect();
+        canvas.width = svgRect.width;
+        canvas.height = svgRect.height;
+        
+        // Convert SVG to data URL
+        const svgData = new XMLSerializer().serializeToString(svg);
+        const svgBlob = new Blob([svgData], {type: 'image/svg+xml;charset=utf-8'});
+        const url = URL.createObjectURL(svgBlob);
+        
+        // Create image and draw to canvas
+        const img = new Image();
+        img.onload = function() {
+            ctx.drawImage(img, 0, 0);
+            URL.revokeObjectURL(url);
+            
+            // Convert canvas to blob and download
+            canvas.toBlob(function(blob) {
+                const downloadUrl = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = downloadUrl;
+                a.download = 'execution_plan.png';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(downloadUrl);
+            });
+        };
+        img.src = url;
+    } catch (error) {
+        console.error('Error exporting to PNG:', error);
+        alert('Failed to export PNG. Please try again.');
+    }
+}
+
+function exportToSVG(vizContainer) {
+    try {
+        const svg = vizContainer.select("svg").node();
+        if (!svg) {
+            console.error('SVG element not found');
+            return;
+        }
+        
+        // Serialize SVG to string
+        const svgData = new XMLSerializer().serializeToString(svg);
+        
+        // Create blob and download
+        const svgBlob = new Blob([svgData], {type: 'image/svg+xml;charset=utf-8'});
+        const url = URL.createObjectURL(svgBlob);
+        
+        const a = document.createElement('a');
         a.href = url;
-        a.download = "sql_execution_plan.svg";
+        a.download = 'execution_plan.svg';
+        document.body.appendChild(a);
         a.click();
+        document.body.removeChild(a);
         URL.revokeObjectURL(url);
+    } catch (error) {
+        console.error('Error exporting to SVG:', error);
+        alert('Failed to export SVG. Please try again.');
     }
 }
 
@@ -1778,3 +3059,400 @@ function fallbackCopy(text) {
     
     document.body.removeChild(textArea);
 }
+
+// Sample data definitions for each database engine
+const engineSamples = {
+    postgresql: {
+        sql: `WITH monthly_sales AS (
+    SELECT 
+        p.category_id,
+        DATE_TRUNC('month', o.created_at) as sale_month,
+        SUM(oi.quantity * oi.unit_price) as total_sales,
+        COUNT(DISTINCT o.customer_id) as unique_customers
+    FROM orders o
+    JOIN order_items oi ON o.order_id = oi.order_id
+    JOIN products p ON oi.product_id = p.product_id
+    WHERE o.status = 'completed'
+    AND o.created_at >= CURRENT_DATE - INTERVAL '12 months'
+    GROUP BY p.category_id, DATE_TRUNC('month', o.created_at)
+),
+category_rankings AS (
+    SELECT 
+        c.category_name,
+        ms.sale_month,
+        ms.total_sales,
+        ms.unique_customers,
+        RANK() OVER (PARTITION BY ms.sale_month ORDER BY ms.total_sales DESC) as sales_rank,
+        LAG(ms.total_sales) OVER (PARTITION BY c.category_id ORDER BY ms.sale_month) as prev_month_sales
+    FROM monthly_sales ms
+    JOIN categories c ON ms.category_id = c.category_id
+)
+SELECT 
+    cr.category_name,
+    cr.sale_month,
+    cr.total_sales,
+    cr.unique_customers,
+    cr.sales_rank,
+    ROUND((cr.total_sales - cr.prev_month_sales) / NULLIF(cr.prev_month_sales, 0) * 100, 2) as sales_growth_pct,
+    EXISTS (
+        SELECT 1 
+        FROM inventory i
+        JOIN products p ON i.product_id = p.product_id
+        JOIN categories c ON p.category_id = c.category_id
+        WHERE c.category_name = cr.category_name
+        AND i.stock_level < i.reorder_point
+    ) as needs_restock
+FROM category_rankings cr
+WHERE cr.sales_rank <= 5
+ORDER BY cr.sale_month DESC, cr.sales_rank;`,
+        explain: `CTE Scan on category_rankings cr  (cost=25437.59..25439.11 rows=50 width=152)
+  Output: cr.category_name, cr.sale_month, cr.total_sales, cr.unique_customers, cr.sales_rank, (round((((cr.total_sales - cr.prev_month_sales) / NULLIF(cr.prev_month_sales, 0.0)) * 100.0), 2)), (SubPlan 1)
+  Filter: (cr.sales_rank <= 5)
+  CTE monthly_sales
+    ->  GroupAggregate  (cost=11754.98..12004.98 rows=1000 width=48)
+          Output: p.category_id, date_trunc('month'::text, o.created_at), sum((oi.quantity * oi.unit_price)), count(DISTINCT o.customer_id)
+          Group Key: p.category_id, date_trunc('month'::text, o.created_at)
+          ->  Sort  (cost=11754.98..11817.48 rows=25000 width=36)
+                Sort Key: p.category_id, date_trunc('month'::text, o.created_at)
+                ->  Hash Join  (cost=2822.00..9879.75 rows=25000 width=36)
+                      Hash Cond: (oi.product_id = p.product_id)
+                      ->  Hash Join  (cost=1649.00..7331.75 rows=25000 width=32)
+                            Hash Cond: (oi.order_id = o.order_id)
+                            ->  Seq Scan on order_items oi  (cost=0.00..4457.00 rows=100000 width=20)
+                            ->  Hash  (cost=1030.00..1030.00 rows=25000 width=20)
+                                  ->  Seq Scan on orders o  (cost=0.00..1030.00 rows=25000 width=20)
+                                        Filter: ((status = 'completed'::text) AND (created_at >= (CURRENT_DATE - '1 year'::interval)))
+                      ->  Hash  (cost=952.00..952.00 rows=10000 width=8)
+                            ->  Seq Scan on products p  (cost=0.00..952.00 rows=10000 width=8)
+  CTE category_rankings
+    ->  WindowAgg  (cost=13254.98..13429.98 rows=1000 width=56)
+          Output: c.category_name, ms.sale_month, ms.total_sales, ms.unique_customers, (rank() OVER (?)), (lag(ms.total_sales) OVER (?))
+          ->  Sort  (cost=13254.98..13257.48 rows=1000 width=48)
+                Sort Key: ms.sale_month DESC
+                ->  Hash Join  (cost=33.00..13179.98 rows=1000 width=48)
+                      Hash Cond: (ms.category_id = c.category_id)
+                      ->  CTE Scan on monthly_sales ms  (cost=0.00..20.00 rows=1000 width=32)
+                      ->  Hash  (cost=20.50..20.50 rows=1000 width=20)
+                            ->  Seq Scan on categories c  (cost=0.00..20.50 rows=1000 width=20)
+  SubPlan 1
+    ->  Nested Loop  (cost=8.45..1040.93 rows=1 width=1)
+          ->  Hash Join  (cost=8.45..1027.45 rows=100 width=4)
+                Hash Cond: (p.category_id = c_1.category_id)
+                ->  Seq Scan on products p  (cost=0.00..952.00 rows=10000 width=8)
+                ->  Hash  (cost=8.44..8.44 rows=1 width=4)
+                      ->  Index Scan using categories_name_idx on categories c_1  (cost=0.28..8.44 rows=1 width=4)
+                            Index Cond: ((category_name)::text = (cr.category_name)::text)
+          ->  Index Scan using inventory_product_id_idx on inventory i  (cost=0.29..0.13 rows=1 width=1)
+                Index Cond: (product_id = p.product_id)
+                Filter: (stock_level < reorder_point)`,
+        tables: [
+            ['categories', 'CREATE TABLE categories (category_id INT PRIMARY KEY, category_name VARCHAR(100) NOT NULL, description TEXT, parent_category_id INT REFERENCES categories(category_id));', '1000', '500KB', true, 'category_id', false, '', ''],
+            ['products', 'CREATE TABLE products (product_id INT PRIMARY KEY, category_id INT NOT NULL REFERENCES categories(category_id), product_name VARCHAR(200) NOT NULL, description TEXT, unit_price DECIMAL(10,2) NOT NULL, weight DECIMAL(8,2), dimensions VARCHAR(50));', '10000', '5MB', true, 'product_id', true, 'category_id', 'categories'],
+            ['customers', 'CREATE TABLE customers (customer_id INT PRIMARY KEY, email VARCHAR(255) NOT NULL, first_name VARCHAR(50), last_name VARCHAR(50), address TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);', '50000', '10MB', true, 'customer_id', false, '', ''],
+            ['orders', 'CREATE TABLE orders (order_id INT PRIMARY KEY, customer_id INT NOT NULL REFERENCES customers(customer_id), status VARCHAR(20) NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, shipped_at TIMESTAMP, total_amount DECIMAL(12,2));', '100000', '20MB', true, 'order_id', true, 'customer_id', 'customers'],
+            ['order_items', 'CREATE TABLE order_items (order_id INT REFERENCES orders(order_id), product_id INT REFERENCES products(product_id), quantity INT NOT NULL, unit_price DECIMAL(10,2) NOT NULL, PRIMARY KEY (order_id, product_id));', '250000', '40MB', true, 'order_id,product_id', true, 'product_id', 'products'],
+            ['inventory', 'CREATE TABLE inventory (product_id INT PRIMARY KEY REFERENCES products(product_id), warehouse_id INT NOT NULL, stock_level INT NOT NULL, reorder_point INT NOT NULL, last_restock_date TIMESTAMP);', '10000', '2MB', true, 'product_id', false, '', '']
+        ],
+        indexes: [
+            ['idx_category_name', 'categories', 'CREATE INDEX idx_category_name ON categories(category_name);', '100KB'],
+            ['idx_product_category', 'products', 'CREATE INDEX idx_product_category ON products(category_id);', '1MB'],
+            ['idx_customer_email', 'customers', 'CREATE UNIQUE INDEX idx_customer_email ON customers(email);', '2MB'],
+            ['idx_order_customer', 'orders', 'CREATE INDEX idx_order_customer ON orders(customer_id);', '4MB'],
+            ['idx_order_status_date', 'orders', 'CREATE INDEX idx_order_status_date ON orders(status, created_at);', '5MB'],
+            ['idx_order_items_product', 'order_items', 'CREATE INDEX idx_order_items_product ON order_items(product_id);', '8MB'],
+            ['idx_inventory_stock', 'inventory', 'CREATE INDEX idx_inventory_stock ON inventory(stock_level) WHERE stock_level < reorder_point;', '500KB']
+        ]
+    },
+    mysql: {
+        sql: `SELECT 
+    p.product_name,
+    c.category_name,
+    COUNT(oi.order_id) as order_count,
+    SUM(oi.quantity * oi.unit_price) as total_revenue,
+    AVG(oi.unit_price) as avg_price
+FROM products p
+JOIN categories c ON p.category_id = c.category_id
+JOIN order_items oi ON p.product_id = oi.product_id
+JOIN orders o ON oi.order_id = o.order_id
+WHERE o.status = 'completed'
+    AND o.created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)
+GROUP BY p.product_name, c.category_name
+HAVING COUNT(oi.order_id) > 5
+ORDER BY total_revenue DESC;`,
+        explain: `+----+-------------+-------+-------+----------------------+----------------------+---------+------+--------+-----------------------------------------------------+
+| id | select_type | table | type  | possible_keys        | key                  | key_len | ref  | rows   | Extra                                               |
++----+-------------+-------+-------+----------------------+----------------------+---------+------+--------+-----------------------------------------------------+
+|  1 | SIMPLE      | o     | ALL   | PRIMARY,idx_status   | NULL                 | NULL    | NULL | 100000 | Using where; Using temporary; Using filesort       |
+|  1 | SIMPLE      | oi    | ref   | PRIMARY,idx_product  | PRIMARY              | 4       | o.id |      5 | NULL                                                |
+|  1 | SIMPLE      | p     | eq_ref| PRIMARY,idx_category | PRIMARY              | 4       | oi.p |      1 | NULL                                                |
+|  1 | SIMPLE      | c     | eq_ref| PRIMARY,idx_name     | PRIMARY              | 4       | p.c  |      1 | NULL                                                |
++----+-------------+-------+-------+----------------------+----------------------+---------+------+--------+-----------------------------------------------------+`,
+        tables: [
+            ['categories', 'CREATE TABLE categories (category_id INT PRIMARY KEY, category_name VARCHAR(100) NOT NULL, description TEXT, parent_category_id INT REFERENCES categories(category_id));', '1000', '500KB', true, 'category_id', false, '', ''],
+            ['products', 'CREATE TABLE products (product_id INT PRIMARY KEY, category_id INT NOT NULL REFERENCES categories(category_id), product_name VARCHAR(200) NOT NULL, description TEXT, unit_price DECIMAL(10,2) NOT NULL, weight DECIMAL(8,2), dimensions VARCHAR(50));', '10000', '5MB', true, 'product_id', true, 'category_id', 'categories'],
+            ['customers', 'CREATE TABLE customers (customer_id INT PRIMARY KEY, email VARCHAR(255) NOT NULL, first_name VARCHAR(50), last_name VARCHAR(50), address TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);', '50000', '10MB', true, 'customer_id', false, '', ''],
+            ['orders', 'CREATE TABLE orders (order_id INT PRIMARY KEY, customer_id INT NOT NULL REFERENCES customers(customer_id), status VARCHAR(20) NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, shipped_at TIMESTAMP, total_amount DECIMAL(12,2));', '100000', '20MB', true, 'order_id', true, 'customer_id', 'customers'],
+            ['order_items', 'CREATE TABLE order_items (order_id INT REFERENCES orders(order_id), product_id INT REFERENCES products(product_id), quantity INT NOT NULL, unit_price DECIMAL(10,2) NOT NULL, PRIMARY KEY (order_id, product_id));', '250000', '40MB', true, 'order_id,product_id', true, 'product_id', 'products']
+        ],
+        indexes: [
+            ['idx_category_name', 'categories', 'CREATE INDEX idx_category_name ON categories(category_name);', '100KB'],
+            ['idx_product_category', 'products', 'CREATE INDEX idx_product_category ON products(category_id);', '1MB'],
+            ['idx_customer_email', 'customers', 'CREATE UNIQUE INDEX idx_customer_email ON customers(email);', '2MB'],
+            ['idx_order_customer', 'orders', 'CREATE INDEX idx_order_customer ON orders(customer_id);', '4MB'],
+            ['idx_order_status_date', 'orders', 'CREATE INDEX idx_order_status_date ON orders(status, created_at);', '5MB'],
+            ['idx_order_items_product', 'order_items', 'CREATE INDEX idx_order_items_product ON order_items(product_id);', '8MB']
+        ]
+    },
+    sqlserver: {
+        sql: `SELECT 
+    p.product_name,
+    c.category_name,
+    COUNT(oi.order_id) as order_count,
+    SUM(oi.quantity * oi.unit_price) as total_revenue,
+    AVG(oi.unit_price) as avg_price
+FROM products p
+JOIN categories c ON p.category_id = c.category_id
+JOIN order_items oi ON p.product_id = oi.product_id
+JOIN orders o ON oi.order_id = o.order_id
+WHERE o.status = 'completed'
+    AND o.created_at >= DATEADD(month, -6, GETDATE())
+GROUP BY p.product_name, c.category_name
+HAVING COUNT(oi.order_id) > 5
+ORDER BY total_revenue DESC;`,
+                        explain: `|--Sort(ORDER BY:([oi].[quantity]*[oi].[unit_price] DESC) (cost=0.0..150.0 rows=1000 width=0, io=500)
+    |--Hash Match(Aggregate, HASH:([p].[product_name], [c].[category_name]), RESIDUAL:([p].[product_name] = [p].[product_name] AND [c].[category_name] = [c].[category_name])) (cost=0.0..200.0 rows=1000 width=0, io=800)
+        |--Hash Match(Inner Join, HASH:([oi].[product_id])=([p].[product_id])) (cost=0.0..250.0 rows=5000 width=0, io=1200)
+            |--Hash Match(Inner Join, HASH:([o].[order_id])=([oi].[order_id])) (cost=0.0..300.0 rows=10000 width=0, io=2000)
+                |--Clustered Index Scan(OBJECT:([dbo].[orders].[PK_orders]), WHERE:([o].[status]='completed' AND [o].[created_at]>=DATEADD(month,(-6),GETDATE()))) (cost=0.0..100.0 rows=50000 width=0, io=1500)
+                |--Clustered Index Scan(OBJECT:([dbo].[order_items].[PK_order_items])) (cost=0.0..150.0 rows=250000 width=0, io=3000)
+            |--Hash Match(Inner Join, HASH:([p].[category_id])=([c].[category_id])) (cost=0.0..120.0 rows=10000 width=0, io=600)
+                |--Clustered Index Scan(OBJECT:([dbo].[products].[PK_products])) (cost=0.0..80.0 rows=10000 width=0, io=400)
+                |--Clustered Index Scan(OBJECT:([dbo].[categories].[PK_categories])) (cost=0.0..50.0 rows=1000 width=0, io=200)`,
+        tables: [
+            ['categories', 'CREATE TABLE categories (category_id INT PRIMARY KEY, category_name NVARCHAR(100) NOT NULL, description NVARCHAR(MAX), parent_category_id INT REFERENCES categories(category_id));', '1000', '500KB', true, 'category_id', false, '', ''],
+            ['products', 'CREATE TABLE products (product_id INT PRIMARY KEY, category_id INT NOT NULL REFERENCES categories(category_id), product_name NVARCHAR(200) NOT NULL, description NVARCHAR(MAX), unit_price DECIMAL(10,2) NOT NULL, weight DECIMAL(8,2), dimensions NVARCHAR(50));', '10000', '5MB', true, 'product_id', true, 'category_id', 'categories'],
+            ['orders', 'CREATE TABLE orders (order_id INT PRIMARY KEY, customer_id INT NOT NULL REFERENCES customers(customer_id), status NVARCHAR(20) NOT NULL, created_at DATETIME DEFAULT GETDATE(), shipped_at DATETIME, total_amount DECIMAL(12,2));', '100000', '20MB', true, 'order_id', true, 'customer_id', 'customers'],
+            ['order_items', 'CREATE TABLE order_items (order_id INT REFERENCES orders(order_id), product_id INT REFERENCES products(product_id), quantity INT NOT NULL, unit_price DECIMAL(10,2) NOT NULL, CONSTRAINT PK_order_items PRIMARY KEY (order_id, product_id));', '250000', '40MB', true, 'order_id,product_id', true, 'product_id', 'products'],
+            ['customers', 'CREATE TABLE customers (customer_id INT PRIMARY KEY, email NVARCHAR(255) NOT NULL, first_name NVARCHAR(50), last_name NVARCHAR(50), address NVARCHAR(MAX), created_at DATETIME DEFAULT GETDATE());', '50000', '10MB', true, 'customer_id', false, '', '']
+        ],
+        indexes: [
+            ['idx_category_name', 'categories', 'CREATE INDEX idx_category_name ON categories(category_name);', '100KB'],
+            ['idx_product_category', 'products', 'CREATE INDEX idx_product_category ON products(category_id);', '1MB'],
+            ['idx_customer_email', 'customers', 'CREATE UNIQUE INDEX idx_customer_email ON customers(email);', '2MB'],
+            ['idx_order_customer', 'orders', 'CREATE INDEX idx_order_customer ON orders(customer_id);', '4MB'],
+            ['idx_order_status_date', 'orders', 'CREATE INDEX idx_order_status_date ON orders(status, created_at);', '5MB'],
+            ['idx_order_items_product', 'order_items', 'CREATE INDEX idx_order_items_product ON order_items(product_id);', '8MB']
+        ]
+    },
+    oracle: {
+        sql: `WITH monthly_sales AS (
+    SELECT 
+        p.category_id,
+        TRUNC(o.created_at, 'MM') as sale_month,
+        SUM(oi.quantity * oi.unit_price) as total_sales,
+        COUNT(DISTINCT o.customer_id) as unique_customers
+    FROM orders o
+    JOIN order_items oi ON o.order_id = oi.order_id
+    JOIN products p ON oi.product_id = p.product_id
+    WHERE o.status = 'completed'
+    AND o.created_at >= ADD_MONTHS(TRUNC(SYSDATE), -12)
+    GROUP BY p.category_id, TRUNC(o.created_at, 'MM')
+),
+category_rankings AS (
+    SELECT 
+        c.category_name,
+        ms.sale_month,
+        ms.total_sales,
+        ms.unique_customers,
+        RANK() OVER (PARTITION BY ms.sale_month ORDER BY ms.total_sales DESC) as sales_rank,
+        LAG(ms.total_sales) OVER (PARTITION BY c.category_id ORDER BY ms.sale_month) as prev_month_sales
+    FROM monthly_sales ms
+    JOIN categories c ON ms.category_id = c.category_id
+)
+SELECT 
+    cr.category_name,
+    cr.sale_month,
+    cr.total_sales,
+    cr.unique_customers,
+    cr.sales_rank,
+    ROUND((cr.total_sales - cr.prev_month_sales) / NULLIF(cr.prev_month_sales, 0) * 100, 2) as sales_growth_pct,
+    CASE WHEN EXISTS (
+        SELECT 1 
+        FROM inventory i
+        JOIN products p ON i.product_id = p.product_id
+        JOIN categories c ON p.category_id = c.category_id
+        WHERE c.category_name = cr.category_name
+        AND i.stock_level < i.reorder_point
+    ) THEN 1 ELSE 0 END as needs_restock
+FROM category_rankings cr
+WHERE cr.sales_rank <= 5
+ORDER BY cr.sale_month DESC, cr.sales_rank`,
+        explain: `Plan hash value: 3849392136
+
+------------------------------------------------------------------------------------------------------------
+| Id  | Operation                      | Name            | Rows  | Bytes | Cost (%CPU)| Time     | Pstart| Pstop |
+------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT              |                 |    50 |  9700 | 25438  (1)| 00:00:01 |       |       |
+|   1 |  SORT ORDER BY               |                 |    50 |  9700 |  2540  (1)| 00:00:01 |       |       |
+|   2 |   VIEW                       |                 |    50 |  9700 |  2539  (1)| 00:00:01 |       |       |
+|*  3 |    WINDOW SORT PUSHED RANK   |                 |  1000 | 48000 |  2539  (1)| 00:00:01 |       |       |
+|   4 |     HASH JOIN               |                 |  1000 | 48000 |  2538  (1)| 00:00:01 |       |       |
+|   5 |      TABLE ACCESS FULL      | CATEGORIES      |  1000 | 20000 |    20  (0)| 00:00:01 |       |       |
+|   6 |      VIEW                   |                 |  1000 | 28000 |  2517  (1)| 00:00:01 |       |       |
+|   7 |       HASH GROUP BY         |                 |  1000 | 36000 |  2517  (1)| 00:00:01 |       |       |
+|   8 |        HASH JOIN           |                 | 25000 |  900K |  2466  (1)| 00:00:01 |       |       |
+|   9 |         HASH JOIN          |                 | 25000 |  700K |  1514  (1)| 00:00:01 |       |       |
+|  10 |          TABLE ACCESS FULL | ORDERS          | 25000 |  500K |   515  (1)| 00:00:01 |       |       |
+|  11 |          TABLE ACCESS FULL | ORDER_ITEMS     |100000 |  2600K|   998  (1)| 00:00:01 |       |       |
+|  12 |         TABLE ACCESS FULL  | PRODUCTS        | 10000 |  200K |   952  (1)| 00:00:01 |       |       |
+------------------------------------------------------------------------------------------------------------
+
+Predicate Information (identified by operation id):
+---------------------------------------------------
+   3 - filter("CR"."SALES_RANK"<=5)`,
+        tables: [
+            ['categories', 'CREATE TABLE categories (category_id NUMBER PRIMARY KEY, category_name VARCHAR2(100) NOT NULL, description CLOB, parent_category_id NUMBER REFERENCES categories(category_id));', '1000', '500KB', true, 'category_id', false, '', ''],
+            ['products', 'CREATE TABLE products (product_id NUMBER PRIMARY KEY, category_id NUMBER NOT NULL REFERENCES categories(category_id), product_name VARCHAR2(200) NOT NULL, description CLOB, unit_price NUMBER(10,2) NOT NULL, weight NUMBER(8,2), dimensions VARCHAR2(50));', '10000', '5MB', true, 'product_id', true, 'category_id', 'categories'],
+            ['customers', 'CREATE TABLE customers (customer_id NUMBER PRIMARY KEY, email VARCHAR2(255) NOT NULL, first_name VARCHAR2(50), last_name VARCHAR2(50), address CLOB, created_at TIMESTAMP DEFAULT SYSTIMESTAMP);', '50000', '10MB', true, 'customer_id', false, '', ''],
+            ['orders', 'CREATE TABLE orders (order_id NUMBER PRIMARY KEY, customer_id NUMBER NOT NULL REFERENCES customers(customer_id), status VARCHAR2(20) NOT NULL, created_at TIMESTAMP DEFAULT SYSTIMESTAMP, shipped_at TIMESTAMP, total_amount NUMBER(12,2));', '100000', '20MB', true, 'order_id', true, 'customer_id', 'customers'],
+            ['order_items', 'CREATE TABLE order_items (order_id NUMBER REFERENCES orders(order_id), product_id NUMBER REFERENCES products(product_id), quantity NUMBER NOT NULL, unit_price NUMBER(10,2) NOT NULL, CONSTRAINT pk_order_items PRIMARY KEY (order_id, product_id));', '250000', '40MB', true, 'order_id,product_id', true, 'product_id', 'products'],
+            ['inventory', 'CREATE TABLE inventory (product_id NUMBER PRIMARY KEY REFERENCES products(product_id), warehouse_id NUMBER NOT NULL, stock_level NUMBER NOT NULL, reorder_point NUMBER NOT NULL, last_restock_date TIMESTAMP);', '10000', '2MB', true, 'product_id', false, '', '']
+        ],
+        indexes: [
+            ['idx_category_name', 'categories', 'CREATE INDEX idx_category_name ON categories(category_name);', '100KB'],
+            ['idx_product_category', 'products', 'CREATE INDEX idx_product_category ON products(category_id);', '1MB'],
+            ['idx_customer_email', 'customers', 'CREATE UNIQUE INDEX idx_customer_email ON customers(email);', '2MB'],
+            ['idx_order_customer', 'orders', 'CREATE INDEX idx_order_customer ON orders(customer_id);', '4MB'],
+            ['idx_order_status_date', 'orders', 'CREATE INDEX idx_order_status_date ON orders(status, created_at);', '5MB'],
+            ['idx_order_items_product', 'order_items', 'CREATE INDEX idx_order_items_product ON order_items(product_id);', '8MB'],
+            ['idx_inventory_stock', 'inventory', 'CREATE INDEX idx_inventory_stock ON inventory(stock_level) WHERE stock_level < reorder_point;', '500KB']
+        ]
+    },
+    sqlite: {
+        sql: `SELECT 
+    p.product_name,
+    c.category_name,
+    COUNT(oi.order_id) as order_count,
+    SUM(oi.quantity * oi.unit_price) as total_revenue,
+    AVG(oi.unit_price) as avg_price
+FROM products p
+JOIN categories c ON p.category_id = c.category_id
+JOIN order_items oi ON p.product_id = oi.product_id
+JOIN orders o ON oi.order_id = o.order_id
+WHERE o.status = 'completed'
+    AND o.created_at >= datetime('now', '-6 months')
+GROUP BY p.product_name, c.category_name
+HAVING COUNT(oi.order_id) > 5
+ORDER BY total_revenue DESC;`,
+        explain: `QUERY PLAN
+SEARCH TABLE orders USING INDEX idx_order_status_date (status=? AND created_at>=?)
+SCAN TABLE order_items
+SEARCH TABLE products USING INTEGER PRIMARY KEY (rowid=?)
+SEARCH TABLE categories USING INTEGER PRIMARY KEY (rowid=?)
+USE TEMP B-TREE FOR GROUP BY
+USE TEMP B-TREE FOR ORDER BY`,
+        tables: [
+            ['categories', 'CREATE TABLE categories (category_id INTEGER PRIMARY KEY, category_name TEXT NOT NULL, description TEXT, parent_category_id INTEGER REFERENCES categories(category_id));', '1000', '500KB', true, 'category_id', false, '', ''],
+            ['products', 'CREATE TABLE products (product_id INTEGER PRIMARY KEY, category_id INTEGER NOT NULL REFERENCES categories(category_id), product_name TEXT NOT NULL, description TEXT, unit_price REAL NOT NULL, weight REAL, dimensions TEXT);', '10000', '5MB', true, 'product_id', true, 'category_id', 'categories'],
+            ['customers', 'CREATE TABLE customers (customer_id INTEGER PRIMARY KEY, email TEXT NOT NULL, first_name TEXT, last_name TEXT, address TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);', '50000', '10MB', true, 'customer_id', false, '', ''],
+            ['orders', 'CREATE TABLE orders (order_id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(customer_id), status TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP, shipped_at TEXT, total_amount REAL);', '100000', '20MB', true, 'order_id', true, 'customer_id', 'customers'],
+            ['order_items', 'CREATE TABLE order_items (order_id INTEGER REFERENCES orders(order_id), product_id INTEGER REFERENCES products(product_id), quantity INTEGER NOT NULL, unit_price REAL NOT NULL, PRIMARY KEY (order_id, product_id));', '250000', '40MB', true, 'order_id,product_id', true, 'product_id', 'products']
+        ],
+        indexes: [
+            ['idx_category_name', 'categories', 'CREATE INDEX idx_category_name ON categories(category_name);', '100KB'],
+            ['idx_product_category', 'products', 'CREATE INDEX idx_product_category ON products(category_id);', '1MB'],
+            ['idx_customer_email', 'customers', 'CREATE UNIQUE INDEX idx_customer_email ON customers(email);', '2MB'],
+            ['idx_order_customer', 'orders', 'CREATE INDEX idx_order_customer ON orders(customer_id);', '4MB'],
+            ['idx_order_status_date', 'orders', 'CREATE INDEX idx_order_status_date ON orders(status, created_at);', '5MB'],
+            ['idx_order_items_product', 'order_items', 'CREATE INDEX idx_order_items_product ON order_items(product_id);', '8MB']
+        ]
+    }
+};
+
+// Helper function to calculate plan complexity
+function calculatePlanComplexity(treeData) {
+    let complexity = 0;
+    
+    function traverse(node) {
+        complexity += 1;
+        if (node.children) {
+            node.children.forEach(traverse);
+        }
+    }
+    
+    traverse(treeData);
+    return complexity;
+}
+
+function loadSampleData() {
+    // 1. Detect selected DB engine
+    const dbEngine = document.getElementById('db_engine_select').value;
+
+    // 2. Get sample data for the selected engine
+    let sample = engineSamples[dbEngine];
+    
+    // Handle unknown engine
+    if (!sample) {
+        const feedback = document.getElementById('sql_query_feedback');
+        if (feedback) {
+            feedback.innerHTML = `No sample data available for ${dbEngine}. Using PostgreSQL sample data instead.`;
+            feedback.style.color = '#f59e0b';
+            feedback.setAttribute('aria-live', 'polite');
+        }
+        // Default to PostgreSQL sample data
+        sample = engineSamples['postgresql'];
+    }
+
+    // 3. Set SQL Query
+    document.getElementById('sql_query_textarea').value = sample.sql;
+    
+    // 4. Set EXPLAIN plan
+    document.getElementById('explain_plan_textarea').value = sample.explain;
+    
+    // 5. Clear and add sample tables
+    const tablesContainer = document.getElementById('tables-container');
+    tablesContainer.innerHTML = '';
+    sample.tables.forEach(args => addTable(...args));
+    
+    // 6. Clear and add sample indexes
+    const indexesContainer = document.getElementById('indexes-container');
+    indexesContainer.innerHTML = '';
+    sample.indexes.forEach(args => addIndex(...args));
+    
+    // 7. Trigger validation and tooltips
+    if (window.bootstrap && bootstrap.Tooltip) {
+        var newInputs = document.querySelectorAll('[title]');
+        newInputs.forEach(function (el) {
+            new bootstrap.Tooltip(el);
+        });
+    }
+    
+    // 8. Trigger validation for SQL and EXPLAIN
+    if (typeof update === 'function') update(reserved_words);
+    if (typeof validateExplain === 'function') validateExplain();
+    
+    // 9. Announce to screen readers
+    const feedback = document.getElementById('sql_query_feedback');
+    if (feedback) {
+        feedback.innerHTML = `Sample data loaded for ${dbEngine.toUpperCase()}.`;
+        feedback.style.color = '#22c55e';
+        feedback.setAttribute('aria-live', 'polite');
+        
+        // Clear feedback after 3 seconds
+        setTimeout(() => {
+            feedback.innerHTML = '';
+            feedback.style.color = '';
+        }, 3000);
+    }
+    
+    // 10. Add ARIA live region for screen readers
+    const ariaAnnouncement = document.createElement('div');
+    ariaAnnouncement.setAttribute('role', 'status');
+    ariaAnnouncement.setAttribute('aria-live', 'polite');
+    ariaAnnouncement.className = 'visually-hidden';
+    ariaAnnouncement.textContent = `Sample data for ${dbEngine.toUpperCase()} has been loaded. The query analyzes user order counts with tables and indexes.`;
+    document.body.appendChild(ariaAnnouncement);
+    setTimeout(() => document.body.removeChild(ariaAnnouncement), 3000);
+}
+
+
