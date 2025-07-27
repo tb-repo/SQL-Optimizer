@@ -1520,3 +1520,138 @@ function fallbackCopy(text) {
     
     document.body.removeChild(textArea);
 }
+
+// Sample data definitions for each database engine
+const engineSamples = {
+    postgresql: {
+        sql: `SELECT u.id, u.name, COUNT(o.id) AS order_count\nFROM users u\nLEFT JOIN orders o ON u.id = o.user_id\nWHERE u.status = 'active'\nGROUP BY u.id, u.name\nHAVING COUNT(o.id) > 0\nORDER BY order_count DESC\nLIMIT 10;`,
+        explain: `Seq Scan on users  (cost=0.00..431.00 rows=21000 width=4)\n  Filter: (status = 'active')\nHash Left Join  (cost=0.00..431.00 rows=21000 width=8)\n  Hash Cond: (o.user_id = u.id)` ,
+        tables: [
+            ['users', 'CREATE TABLE users (id INT PRIMARY KEY, name TEXT, status TEXT);', '120000', '500MB', true, 'id', false, '', ''],
+            ['orders', 'CREATE TABLE orders (id INT PRIMARY KEY, user_id INT, amount NUMERIC, created_at TIMESTAMP);', '500000', '2GB', true, 'id', true, 'user_id', 'users']
+        ],
+        indexes: [
+            ['idx_status', 'users', 'CREATE INDEX idx_status ON users(status);', '50MB'],
+            ['idx_orders_user', 'orders', 'CREATE INDEX idx_orders_user ON orders(user_id);', '200MB']
+        ]
+    },
+    mysql: {
+        sql: `SELECT u.id, u.name, COUNT(o.id) AS order_count\nFROM users u\nLEFT JOIN orders o ON u.id = o.user_id\nWHERE u.status = 'active'\nGROUP BY u.id, u.name\nHAVING COUNT(o.id) > 0\nORDER BY order_count DESC\nLIMIT 10;`,
+        explain: `id | select_type | table | type | possible_keys | key | key_len | ref | rows | Extra\n1 | SIMPLE | users | ALL | NULL | NULL | NULL | NULL | 120000 | Using where\n1 | SIMPLE | orders | ref | user_id | user_id | 4 | users.id | 5 |`,
+        tables: [
+            ['users', 'CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(100), status VARCHAR(20));', '120000', '500MB', true, 'id', false, '', ''],
+            ['orders', 'CREATE TABLE orders (id INT PRIMARY KEY, user_id INT, amount DECIMAL(10,2), created_at DATETIME);', '500000', '2GB', true, 'id', true, 'user_id', 'users']
+        ],
+        indexes: [
+            ['idx_status', 'users', 'CREATE INDEX idx_status ON users(status);', '50MB'],
+            ['idx_orders_user', 'orders', 'CREATE INDEX idx_orders_user ON orders(user_id);', '200MB']
+        ]
+    },
+    sqlserver: {
+        sql: `SELECT u.id, u.name, COUNT(o.id) AS order_count\nFROM users u\nLEFT JOIN orders o ON u.id = o.user_id\nWHERE u.status = 'active'\nGROUP BY u.id, u.name\nHAVING COUNT(o.id) > 0\nORDER BY order_count DESC;`,
+        explain: `|--Clustered Index Scan(OBJECT:([dbo].[users]))\n|--Hash Match(Inner Join, HASH:([u].[id])=([o].[user_id]))\n|--Clustered Index Scan(OBJECT:([dbo].[orders]))`,
+        tables: [
+            ['users', 'CREATE TABLE users (id INT PRIMARY KEY, name NVARCHAR(100), status NVARCHAR(20));', '120000', '500MB', true, 'id', false, '', ''],
+            ['orders', 'CREATE TABLE orders (id INT PRIMARY KEY, user_id INT, amount DECIMAL(10,2), created_at DATETIME);', '500000', '2GB', true, 'id', true, 'user_id', 'users']
+        ],
+        indexes: [
+            ['idx_status', 'users', 'CREATE INDEX idx_status ON users(status);', '50MB'],
+            ['idx_orders_user', 'orders', 'CREATE INDEX idx_orders_user ON orders(user_id);', '200MB']
+        ]
+    },
+    oracle: {
+        sql: `SELECT u.id, u.name, COUNT(o.id) AS order_count\nFROM users u\nLEFT JOIN orders o ON u.id = o.user_id\nWHERE u.status = 'active'\nGROUP BY u.id, u.name\nHAVING COUNT(o.id) > 0\nORDER BY order_count DESC`,
+        explain: `SELECT STATEMENT\n  HASH JOIN\n    TABLE ACCESS FULL USERS\n    TABLE ACCESS FULL ORDERS`,
+        tables: [
+            ['users', 'CREATE TABLE users (id NUMBER PRIMARY KEY, name VARCHAR2(100), status VARCHAR2(20));', '120000', '500MB', true, 'id', false, '', ''],
+            ['orders', 'CREATE TABLE orders (id NUMBER PRIMARY KEY, user_id NUMBER, amount NUMBER, created_at DATE);', '500000', '2GB', true, 'id', true, 'user_id', 'users']
+        ],
+        indexes: [
+            ['idx_status', 'users', 'CREATE INDEX idx_status ON users(status);', '50MB'],
+            ['idx_orders_user', 'orders', 'CREATE INDEX idx_orders_user ON orders(user_id);', '200MB']
+        ]
+    },
+    sqlite: {
+        sql: `SELECT u.id, u.name, COUNT(o.id) AS order_count\nFROM users u\nLEFT JOIN orders o ON u.id = o.user_id\nWHERE u.status = 'active'\nGROUP BY u.id, u.name\nHAVING COUNT(o.id) > 0\nORDER BY order_count DESC\nLIMIT 10;`,
+        explain: `SCAN TABLE users\nSEARCH TABLE orders USING INDEX idx_orders_user (user_id=?)`,
+        tables: [
+            ['users', 'CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, status TEXT);', '120000', '500MB', true, 'id', false, '', ''],
+            ['orders', 'CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER, amount REAL, created_at TEXT);', '500000', '2GB', true, 'id', true, 'user_id', 'users']
+        ],
+        indexes: [
+            ['idx_status', 'users', 'CREATE INDEX idx_status ON users(status);', '50MB'],
+            ['idx_orders_user', 'orders', 'CREATE INDEX idx_orders_user ON orders(user_id);', '200MB']
+        ]
+    }
+};
+
+function loadSampleData() {
+    // 1. Detect selected DB engine
+    const dbEngine = document.getElementById('db_engine_select').value;
+
+    // 2. Get sample data for the selected engine
+    let sample = engineSamples[dbEngine];
+    
+    // Handle unknown engine
+    if (!sample) {
+        const feedback = document.getElementById('sql_query_feedback');
+        if (feedback) {
+            feedback.innerHTML = `No sample data available for ${dbEngine}. Using PostgreSQL sample data instead.`;
+            feedback.style.color = '#f59e0b';
+            feedback.setAttribute('aria-live', 'polite');
+        }
+        // Default to PostgreSQL sample data
+        sample = engineSamples['postgresql'];
+    }
+
+    // 3. Set SQL Query
+    document.getElementById('sql_query_textarea').value = sample.sql;
+    
+    // 4. Set EXPLAIN plan
+    document.getElementById('explain_plan_textarea').value = sample.explain;
+    
+    // 5. Clear and add sample tables
+    const tablesContainer = document.getElementById('tables-container');
+    tablesContainer.innerHTML = '';
+    sample.tables.forEach(args => addTable(...args));
+    
+    // 6. Clear and add sample indexes
+    const indexesContainer = document.getElementById('indexes-container');
+    indexesContainer.innerHTML = '';
+    sample.indexes.forEach(args => addIndex(...args));
+    
+    // 7. Trigger validation and tooltips
+    if (window.bootstrap && bootstrap.Tooltip) {
+        var newInputs = document.querySelectorAll('[title]');
+        newInputs.forEach(function (el) {
+            new bootstrap.Tooltip(el);
+        });
+    }
+    
+    // 8. Trigger validation for SQL and EXPLAIN
+    if (typeof update === 'function') update(reserved_words);
+    if (typeof validateExplain === 'function') validateExplain();
+    
+    // 9. Announce to screen readers
+    const feedback = document.getElementById('sql_query_feedback');
+    if (feedback) {
+        feedback.innerHTML = `Sample data loaded for ${dbEngine.toUpperCase()}.`;
+        feedback.style.color = '#22c55e';
+        feedback.setAttribute('aria-live', 'polite');
+        
+        // Clear feedback after 3 seconds
+        setTimeout(() => {
+            feedback.innerHTML = '';
+            feedback.style.color = '';
+        }, 3000);
+    }
+    
+    // 10. Add ARIA live region for screen readers
+    const ariaAnnouncement = document.createElement('div');
+    ariaAnnouncement.setAttribute('role', 'status');
+    ariaAnnouncement.setAttribute('aria-live', 'polite');
+    ariaAnnouncement.className = 'visually-hidden';
+    ariaAnnouncement.textContent = `Sample data for ${dbEngine.toUpperCase()} has been loaded. The query analyzes user order counts with tables and indexes.`;
+    document.body.appendChild(ariaAnnouncement);
+    setTimeout(() => document.body.removeChild(ariaAnnouncement), 3000);
+}
