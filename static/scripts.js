@@ -1524,15 +1524,104 @@ function fallbackCopy(text) {
 // Sample data definitions for each database engine
 const engineSamples = {
     postgresql: {
-        sql: `SELECT u.id, u.name, COUNT(o.id) AS order_count\nFROM users u\nLEFT JOIN orders o ON u.id = o.user_id\nWHERE u.status = 'active'\nGROUP BY u.id, u.name\nHAVING COUNT(o.id) > 0\nORDER BY order_count DESC\nLIMIT 10;`,
-        explain: `Seq Scan on users  (cost=0.00..431.00 rows=21000 width=4)\n  Filter: (status = 'active')\nHash Left Join  (cost=0.00..431.00 rows=21000 width=8)\n  Hash Cond: (o.user_id = u.id)` ,
+        sql: `WITH monthly_sales AS (
+    SELECT 
+        p.category_id,
+        DATE_TRUNC('month', o.created_at) as sale_month,
+        SUM(oi.quantity * oi.unit_price) as total_sales,
+        COUNT(DISTINCT o.customer_id) as unique_customers
+    FROM orders o
+    JOIN order_items oi ON o.order_id = oi.order_id
+    JOIN products p ON oi.product_id = p.product_id
+    WHERE o.status = 'completed'
+    AND o.created_at >= CURRENT_DATE - INTERVAL '12 months'
+    GROUP BY p.category_id, DATE_TRUNC('month', o.created_at)
+),
+category_rankings AS (
+    SELECT 
+        c.category_name,
+        ms.sale_month,
+        ms.total_sales,
+        ms.unique_customers,
+        RANK() OVER (PARTITION BY ms.sale_month ORDER BY ms.total_sales DESC) as sales_rank,
+        LAG(ms.total_sales) OVER (PARTITION BY c.category_id ORDER BY ms.sale_month) as prev_month_sales
+    FROM monthly_sales ms
+    JOIN categories c ON ms.category_id = c.category_id
+)
+SELECT 
+    cr.category_name,
+    cr.sale_month,
+    cr.total_sales,
+    cr.unique_customers,
+    cr.sales_rank,
+    ROUND((cr.total_sales - cr.prev_month_sales) / NULLIF(cr.prev_month_sales, 0) * 100, 2) as sales_growth_pct,
+    EXISTS (
+        SELECT 1 
+        FROM inventory i
+        JOIN products p ON i.product_id = p.product_id
+        JOIN categories c ON p.category_id = c.category_id
+        WHERE c.category_name = cr.category_name
+        AND i.stock_level < i.reorder_point
+    ) as needs_restock
+FROM category_rankings cr
+WHERE cr.sales_rank <= 5
+ORDER BY cr.sale_month DESC, cr.sales_rank;`,
+        explain: `CTE Scan on category_rankings cr  (cost=25437.59..25439.11 rows=50 width=152)
+  Output: cr.category_name, cr.sale_month, cr.total_sales, cr.unique_customers, cr.sales_rank, (round((((cr.total_sales - cr.prev_month_sales) / NULLIF(cr.prev_month_sales, 0.0)) * 100.0), 2)), (SubPlan 1)
+  Filter: (cr.sales_rank <= 5)
+  CTE monthly_sales
+    ->  GroupAggregate  (cost=11754.98..12004.98 rows=1000 width=48)
+          Output: p.category_id, date_trunc('month'::text, o.created_at), sum((oi.quantity * oi.unit_price)), count(DISTINCT o.customer_id)
+          Group Key: p.category_id, date_trunc('month'::text, o.created_at)
+          ->  Sort  (cost=11754.98..11817.48 rows=25000 width=36)
+                Sort Key: p.category_id, date_trunc('month'::text, o.created_at)
+                ->  Hash Join  (cost=2822.00..9879.75 rows=25000 width=36)
+                      Hash Cond: (oi.product_id = p.product_id)
+                      ->  Hash Join  (cost=1649.00..7331.75 rows=25000 width=32)
+                            Hash Cond: (oi.order_id = o.order_id)
+                            ->  Seq Scan on order_items oi  (cost=0.00..4457.00 rows=100000 width=20)
+                            ->  Hash  (cost=1030.00..1030.00 rows=25000 width=20)
+                                  ->  Seq Scan on orders o  (cost=0.00..1030.00 rows=25000 width=20)
+                                        Filter: ((status = 'completed'::text) AND (created_at >= (CURRENT_DATE - '1 year'::interval)))
+                      ->  Hash  (cost=952.00..952.00 rows=10000 width=8)
+                            ->  Seq Scan on products p  (cost=0.00..952.00 rows=10000 width=8)
+  CTE category_rankings
+    ->  WindowAgg  (cost=13254.98..13429.98 rows=1000 width=56)
+          Output: c.category_name, ms.sale_month, ms.total_sales, ms.unique_customers, (rank() OVER (?)), (lag(ms.total_sales) OVER (?))
+          ->  Sort  (cost=13254.98..13257.48 rows=1000 width=48)
+                Sort Key: ms.sale_month DESC
+                ->  Hash Join  (cost=33.00..13179.98 rows=1000 width=48)
+                      Hash Cond: (ms.category_id = c.category_id)
+                      ->  CTE Scan on monthly_sales ms  (cost=0.00..20.00 rows=1000 width=32)
+                      ->  Hash  (cost=20.50..20.50 rows=1000 width=20)
+                            ->  Seq Scan on categories c  (cost=0.00..20.50 rows=1000 width=20)
+  SubPlan 1
+    ->  Nested Loop  (cost=8.45..1040.93 rows=1 width=1)
+          ->  Hash Join  (cost=8.45..1027.45 rows=100 width=4)
+                Hash Cond: (p.category_id = c_1.category_id)
+                ->  Seq Scan on products p  (cost=0.00..952.00 rows=10000 width=8)
+                ->  Hash  (cost=8.44..8.44 rows=1 width=4)
+                      ->  Index Scan using categories_name_idx on categories c_1  (cost=0.28..8.44 rows=1 width=4)
+                            Index Cond: ((category_name)::text = (cr.category_name)::text)
+          ->  Index Scan using inventory_product_id_idx on inventory i  (cost=0.29..0.13 rows=1 width=1)
+                Index Cond: (product_id = p.product_id)
+                Filter: (stock_level < reorder_point)`,
         tables: [
-            ['users', 'CREATE TABLE users (id INT PRIMARY KEY, name TEXT, status TEXT);', '120000', '500MB', true, 'id', false, '', ''],
-            ['orders', 'CREATE TABLE orders (id INT PRIMARY KEY, user_id INT, amount NUMERIC, created_at TIMESTAMP);', '500000', '2GB', true, 'id', true, 'user_id', 'users']
+            ['categories', 'CREATE TABLE categories (category_id INT PRIMARY KEY, category_name VARCHAR(100) NOT NULL, description TEXT, parent_category_id INT REFERENCES categories(category_id));', '1000', '500KB', true, 'category_id', false, '', ''],
+            ['products', 'CREATE TABLE products (product_id INT PRIMARY KEY, category_id INT NOT NULL REFERENCES categories(category_id), product_name VARCHAR(200) NOT NULL, description TEXT, unit_price DECIMAL(10,2) NOT NULL, weight DECIMAL(8,2), dimensions VARCHAR(50));', '10000', '5MB', true, 'product_id', true, 'category_id', 'categories'],
+            ['customers', 'CREATE TABLE customers (customer_id INT PRIMARY KEY, email VARCHAR(255) NOT NULL, first_name VARCHAR(50), last_name VARCHAR(50), address TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);', '50000', '10MB', true, 'customer_id', false, '', ''],
+            ['orders', 'CREATE TABLE orders (order_id INT PRIMARY KEY, customer_id INT NOT NULL REFERENCES customers(customer_id), status VARCHAR(20) NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, shipped_at TIMESTAMP, total_amount DECIMAL(12,2));', '100000', '20MB', true, 'order_id', true, 'customer_id', 'customers'],
+            ['order_items', 'CREATE TABLE order_items (order_id INT REFERENCES orders(order_id), product_id INT REFERENCES products(product_id), quantity INT NOT NULL, unit_price DECIMAL(10,2) NOT NULL, PRIMARY KEY (order_id, product_id));', '250000', '40MB', true, 'order_id,product_id', true, 'product_id', 'products'],
+            ['inventory', 'CREATE TABLE inventory (product_id INT PRIMARY KEY REFERENCES products(product_id), warehouse_id INT NOT NULL, stock_level INT NOT NULL, reorder_point INT NOT NULL, last_restock_date TIMESTAMP);', '10000', '2MB', true, 'product_id', false, '', '']
         ],
         indexes: [
-            ['idx_status', 'users', 'CREATE INDEX idx_status ON users(status);', '50MB'],
-            ['idx_orders_user', 'orders', 'CREATE INDEX idx_orders_user ON orders(user_id);', '200MB']
+            ['idx_category_name', 'categories', 'CREATE INDEX idx_category_name ON categories(category_name);', '100KB'],
+            ['idx_product_category', 'products', 'CREATE INDEX idx_product_category ON products(category_id);', '1MB'],
+            ['idx_customer_email', 'customers', 'CREATE UNIQUE INDEX idx_customer_email ON customers(email);', '2MB'],
+            ['idx_order_customer', 'orders', 'CREATE INDEX idx_order_customer ON orders(customer_id);', '4MB'],
+            ['idx_order_status_date', 'orders', 'CREATE INDEX idx_order_status_date ON orders(status, created_at);', '5MB'],
+            ['idx_order_items_product', 'order_items', 'CREATE INDEX idx_order_items_product ON order_items(product_id);', '8MB'],
+            ['idx_inventory_stock', 'inventory', 'CREATE INDEX idx_inventory_stock ON inventory(stock_level) WHERE stock_level < reorder_point;', '500KB']
         ]
     },
     mysql: {
@@ -1560,15 +1649,87 @@ const engineSamples = {
         ]
     },
     oracle: {
-        sql: `SELECT u.id, u.name, COUNT(o.id) AS order_count\nFROM users u\nLEFT JOIN orders o ON u.id = o.user_id\nWHERE u.status = 'active'\nGROUP BY u.id, u.name\nHAVING COUNT(o.id) > 0\nORDER BY order_count DESC`,
-        explain: `SELECT STATEMENT\n  HASH JOIN\n    TABLE ACCESS FULL USERS\n    TABLE ACCESS FULL ORDERS`,
+        sql: `WITH monthly_sales AS (
+    SELECT 
+        p.category_id,
+        TRUNC(o.created_at, 'MM') as sale_month,
+        SUM(oi.quantity * oi.unit_price) as total_sales,
+        COUNT(DISTINCT o.customer_id) as unique_customers
+    FROM orders o
+    JOIN order_items oi ON o.order_id = oi.order_id
+    JOIN products p ON oi.product_id = p.product_id
+    WHERE o.status = 'completed'
+    AND o.created_at >= ADD_MONTHS(TRUNC(SYSDATE), -12)
+    GROUP BY p.category_id, TRUNC(o.created_at, 'MM')
+),
+category_rankings AS (
+    SELECT 
+        c.category_name,
+        ms.sale_month,
+        ms.total_sales,
+        ms.unique_customers,
+        RANK() OVER (PARTITION BY ms.sale_month ORDER BY ms.total_sales DESC) as sales_rank,
+        LAG(ms.total_sales) OVER (PARTITION BY c.category_id ORDER BY ms.sale_month) as prev_month_sales
+    FROM monthly_sales ms
+    JOIN categories c ON ms.category_id = c.category_id
+)
+SELECT 
+    cr.category_name,
+    cr.sale_month,
+    cr.total_sales,
+    cr.unique_customers,
+    cr.sales_rank,
+    ROUND((cr.total_sales - cr.prev_month_sales) / NULLIF(cr.prev_month_sales, 0) * 100, 2) as sales_growth_pct,
+    CASE WHEN EXISTS (
+        SELECT 1 
+        FROM inventory i
+        JOIN products p ON i.product_id = p.product_id
+        JOIN categories c ON p.category_id = c.category_id
+        WHERE c.category_name = cr.category_name
+        AND i.stock_level < i.reorder_point
+    ) THEN 1 ELSE 0 END as needs_restock
+FROM category_rankings cr
+WHERE cr.sales_rank <= 5
+ORDER BY cr.sale_month DESC, cr.sales_rank`,
+        explain: `Plan hash value: 3849392136
+
+------------------------------------------------------------------------------------------------------------
+| Id  | Operation                      | Name            | Rows  | Bytes | Cost (%CPU)| Time     | Pstart| Pstop |
+------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT              |                 |    50 |  9700 | 25438  (1)| 00:00:01 |       |       |
+|   1 |  SORT ORDER BY               |                 |    50 |  9700 |  2540  (1)| 00:00:01 |       |       |
+|   2 |   VIEW                       |                 |    50 |  9700 |  2539  (1)| 00:00:01 |       |       |
+|*  3 |    WINDOW SORT PUSHED RANK   |                 |  1000 | 48000 |  2539  (1)| 00:00:01 |       |       |
+|   4 |     HASH JOIN               |                 |  1000 | 48000 |  2538  (1)| 00:00:01 |       |       |
+|   5 |      TABLE ACCESS FULL      | CATEGORIES      |  1000 | 20000 |    20  (0)| 00:00:01 |       |       |
+|   6 |      VIEW                   |                 |  1000 | 28000 |  2517  (1)| 00:00:01 |       |       |
+|   7 |       HASH GROUP BY         |                 |  1000 | 36000 |  2517  (1)| 00:00:01 |       |       |
+|   8 |        HASH JOIN           |                 | 25000 |  900K |  2466  (1)| 00:00:01 |       |       |
+|   9 |         HASH JOIN          |                 | 25000 |  700K |  1514  (1)| 00:00:01 |       |       |
+|  10 |          TABLE ACCESS FULL | ORDERS          | 25000 |  500K |   515  (1)| 00:00:01 |       |       |
+|  11 |          TABLE ACCESS FULL | ORDER_ITEMS     |100000 |  2600K|   998  (1)| 00:00:01 |       |       |
+|  12 |         TABLE ACCESS FULL  | PRODUCTS        | 10000 |  200K |   952  (1)| 00:00:01 |       |       |
+------------------------------------------------------------------------------------------------------------
+
+Predicate Information (identified by operation id):
+---------------------------------------------------
+   3 - filter("CR"."SALES_RANK"<=5)`,
         tables: [
-            ['users', 'CREATE TABLE users (id NUMBER PRIMARY KEY, name VARCHAR2(100), status VARCHAR2(20));', '120000', '500MB', true, 'id', false, '', ''],
-            ['orders', 'CREATE TABLE orders (id NUMBER PRIMARY KEY, user_id NUMBER, amount NUMBER, created_at DATE);', '500000', '2GB', true, 'id', true, 'user_id', 'users']
+            ['categories', 'CREATE TABLE categories (category_id NUMBER PRIMARY KEY, category_name VARCHAR2(100) NOT NULL, description CLOB, parent_category_id NUMBER REFERENCES categories(category_id));', '1000', '500KB', true, 'category_id', false, '', ''],
+            ['products', 'CREATE TABLE products (product_id NUMBER PRIMARY KEY, category_id NUMBER NOT NULL REFERENCES categories(category_id), product_name VARCHAR2(200) NOT NULL, description CLOB, unit_price NUMBER(10,2) NOT NULL, weight NUMBER(8,2), dimensions VARCHAR2(50));', '10000', '5MB', true, 'product_id', true, 'category_id', 'categories'],
+            ['customers', 'CREATE TABLE customers (customer_id NUMBER PRIMARY KEY, email VARCHAR2(255) NOT NULL, first_name VARCHAR2(50), last_name VARCHAR2(50), address CLOB, created_at TIMESTAMP DEFAULT SYSTIMESTAMP);', '50000', '10MB', true, 'customer_id', false, '', ''],
+            ['orders', 'CREATE TABLE orders (order_id NUMBER PRIMARY KEY, customer_id NUMBER NOT NULL REFERENCES customers(customer_id), status VARCHAR2(20) NOT NULL, created_at TIMESTAMP DEFAULT SYSTIMESTAMP, shipped_at TIMESTAMP, total_amount NUMBER(12,2));', '100000', '20MB', true, 'order_id', true, 'customer_id', 'customers'],
+            ['order_items', 'CREATE TABLE order_items (order_id NUMBER REFERENCES orders(order_id), product_id NUMBER REFERENCES products(product_id), quantity NUMBER NOT NULL, unit_price NUMBER(10,2) NOT NULL, CONSTRAINT pk_order_items PRIMARY KEY (order_id, product_id));', '250000', '40MB', true, 'order_id,product_id', true, 'product_id', 'products'],
+            ['inventory', 'CREATE TABLE inventory (product_id NUMBER PRIMARY KEY REFERENCES products(product_id), warehouse_id NUMBER NOT NULL, stock_level NUMBER NOT NULL, reorder_point NUMBER NOT NULL, last_restock_date TIMESTAMP);', '10000', '2MB', true, 'product_id', false, '', '']
         ],
         indexes: [
-            ['idx_status', 'users', 'CREATE INDEX idx_status ON users(status);', '50MB'],
-            ['idx_orders_user', 'orders', 'CREATE INDEX idx_orders_user ON orders(user_id);', '200MB']
+            ['idx_category_name', 'categories', 'CREATE INDEX idx_category_name ON categories(category_name);', '100KB'],
+            ['idx_product_category', 'products', 'CREATE INDEX idx_product_category ON products(category_id);', '1MB'],
+            ['idx_customer_email', 'customers', 'CREATE UNIQUE INDEX idx_customer_email ON customers(email);', '2MB'],
+            ['idx_order_customer', 'orders', 'CREATE INDEX idx_order_customer ON orders(customer_id);', '4MB'],
+            ['idx_order_status_date', 'orders', 'CREATE INDEX idx_order_status_date ON orders(status, created_at);', '5MB'],
+            ['idx_order_items_product', 'order_items', 'CREATE INDEX idx_order_items_product ON order_items(product_id);', '8MB'],
+            ['idx_inventory_stock', 'inventory', 'CREATE INDEX idx_inventory_stock ON inventory(stock_level) WHERE stock_level < reorder_point;', '500KB']
         ]
     },
     sqlite: {
