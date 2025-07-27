@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQL Query Optimizer</title>
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
+    <link rel="shortcut icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <!-- Font Awesome -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    
+    <!-- Custom CSS -->
+    <link href="{{ url_for('static', filename='styles.css') }}" rel="stylesheet">
+    
+    <!-- Mermaid -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.min.js"></script>
+    
+    <!-- SVG Pan Zoom -->
+    <script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
+</head>
+<body>
+    <!-- Navigation Bar -->
+    <nav class="navbar navbar-expand-lg navbar-dark">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="{{ url_for('index') }}">
+                <i class="fas fa-database me-2"></i>
+                SQL Query Optimizer
+            </a>
+            
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <div class="navbar-nav ms-auto action-buttons">
+                    
+                    {% if request.endpoint in ['result', 'shared_result'] %}
+                    <!-- Share Button - Only on results page -->
+                    <button id="share-analysis-btn" class="btn btn-outline-light" title="Share Analysis">
+                        <i class="fas fa-share-alt"></i>
+                        <span>Share</span>
+                    </button>
+                    
+                    <!-- Export Dropdown - Only on results page -->
+                    <div class="dropdown d-inline-block">
+                        <button class="btn btn-outline-light dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                            <i class="fas fa-download"></i>
+                            <span>Export</span>
+                        </button>
+                        <ul class="dropdown-menu dropdown-menu-end">
+                            <li>
+                                <a class="dropdown-item" href="#" onclick="downloadReport('pdf')">
+                                    <i class="fas fa-file-pdf"></i> PDF Report
+                                </a>
+                            </li>
+                            <li>
+                                <a class="dropdown-item" href="#" onclick="downloadReport('csv')">
+                                    <i class="fas fa-file-csv"></i> CSV Report
+                                </a>
+                            </li>
+                            <li>
+                                <a class="dropdown-item" href="#" onclick="downloadReport('markdown')">
+                                    <i class="fas fa-file-alt"></i> Markdown Report
+                                </a>
+                            </li>
+                        </ul>
+                    </div>
+                    {% endif %}
+                    
+                    <!-- Analytics -->
+                    <a href="{{ url_for('analytics_dashboard') }}" class="btn btn-outline-light" title="Analytics">
+                        <i class="fas fa-chart-line"></i>
+                        <span>Analytics</span>
+                    </a>
+                    
+                    <!-- Compare -->
+                    <a href="{{ url_for('compare_queries') }}" class="btn btn-outline-light" title="Compare Queries">
+                        <i class="fas fa-code-compare"></i>
+                        <span>Compare</span>
+                    </a>
+                    
+                    <!-- Help -->
+                    <a href="{{ url_for('help_page') }}" class="btn btn-outline-light" title="Help">
+                        <i class="fas fa-question-circle"></i>
+                        <span>Help</span>
+                    </a>
+                    
+                    <!-- Clear All Inputs -->
+                    <button id="clear-history-btn" class="btn btn-outline-light" title="Clear All Inputs">
+                        <i class="fas fa-trash-alt"></i>
+                        <span>Clear All Inputs</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Did you know? Tips -->
+    <div class="did-you-know-highlight">
+        <div class="did-you-know-header">
+            <i class="fas fa-lightbulb me-2"></i>
+            Did you know? Tips for better SQL performance
+        </div>
+        <div class="did-you-know-content">
+            <div id="engine-tips">
+                <span id="engine-tips-engine" class="badge bg-primary me-2">PostgreSQL</span>
+                <span id="engine-tips-content" class="did-you-know-text">Loading tips...</span>
+            </div>
+            <div class="did-you-know-progress">
+                <div class="did-you-know-progress-bar"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="container mt-4">
+        {% block content %}{% endblock %}
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container"></div>
+
+    <!-- Bootstrap Bundle with Popper -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <!-- jQuery -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    
+    <!-- Papa Parse for CSV -->
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.3.0/papaparse.min.js"></script>
+    
+    <!-- D3.js for Visual Explain Plan -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    
+    <!-- Custom Scripts -->
+    <script src="{{ url_for('static', filename='wordlist.js') }}"></script>
+    <script src="{{ url_for('static', filename='templates.js') }}"></script>
+    <script src="{{ url_for('static', filename='tips.js') }}"></script>
+    <script src="{{ url_for('static', filename='scripts.js') }}"></script>
+</body>
+</html> 

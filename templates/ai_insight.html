@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Insight - {{ ai_result.title if ai_result else 'SQL Analysis' }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        :root {
+            --bs-primary: #2563eb;
+            --bs-primary-rgb: 37, 99, 235;
+            --modern-info: #0ea5e9;
+            --modern-success: #22c55e;
+            --modern-warning: #facc15;
+            --modern-danger: #ef4444;
+            --modern-muted: #6c757d;
+            --modern-bg: #f8f9fa;
+            
+            /* Light mode colors */
+            --bg-primary: #f8fafc;
+            --bg-secondary: #ffffff;
+            --text-primary: #1f2937;
+            --text-secondary: #6b7280;
+            --border-color: #e5e7eb;
+            --card-bg: #ffffff;
+            --input-bg: #ffffff;
+            --input-border: #d1d5db;
+        }
+        
+        [data-theme="dark"] {
+            --bg-primary: #111827;
+            --bg-secondary: #1f2937;
+            --text-primary: #f9fafb;
+            --text-secondary: #d1d5db;
+            --border-color: #374151;
+            --card-bg: #1f2937;
+            --input-bg: #374151;
+            --input-border: #4b5563;
+        }
+        
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+        
+        .card {
+            border-radius: 0.5rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            transition: background-color 0.3s ease, border-color 0.3s ease;
+        }
+        
+        .section-header {
+            background: var(--bs-primary);
+            color: #fff;
+            border-radius: 0.5rem 0.5rem 0 0;
+            padding: 0.75rem 1rem;
+            font-size: 1.1rem;
+            font-weight: 500;
+        }
+        
+        .ai-insight-content {
+            line-height: 1.6;
+            font-size: 1rem;
+        }
+        
+        .ai-insight-content h1, .ai-insight-content h2, .ai-insight-content h3 {
+            color: var(--text-primary);
+            margin-top: 1.5rem;
+            margin-bottom: 0.75rem;
+        }
+        
+        .ai-insight-content p {
+            margin-bottom: 1rem;
+        }
+        
+        .ai-insight-content ul, .ai-insight-content ol {
+            margin-bottom: 1rem;
+            padding-left: 1.5rem;
+        }
+        
+        .ai-insight-content li {
+            margin-bottom: 0.5rem;
+        }
+        
+        .ai-insight-content code {
+            background-color: var(--bg-secondary);
+            padding: 0.2rem 0.4rem;
+            border-radius: 0.25rem;
+            font-size: 0.875rem;
+            color: var(--text-primary);
+        }
+        
+        .ai-insight-content pre {
+            background-color: var(--bg-secondary);
+            padding: 1rem;
+            border-radius: 0.5rem;
+            overflow-x: auto;
+            margin: 1rem 0;
+        }
+        
+        .ai-badge {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 2rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            display: inline-block;
+            margin-bottom: 1rem;
+        }
+        
+        .ai-loading {
+            text-align: center;
+            padding: 2rem;
+        }
+        
+        .ai-error {
+            background-color: #fef2f2;
+            border: 1px solid #fecaca;
+            color: #dc2626;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            margin: 1rem 0;
+        }
+        
+        .context-section {
+            background-color: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+        
+        .context-section h6 {
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+        }
+        
+        .back-button {
+            position: fixed;
+            left: 24px;
+            bottom: 24px;
+            z-index: 2000;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+            border-radius: 0.5rem;
+            background: #2563eb;
+            color: #fff;
+            font-size: 1.1rem;
+            padding: 0.75em 2em;
+            transition: opacity 0.2s, background 0.2s, box-shadow 0.2s;
+            opacity: 0.4;
+        }
+        
+        .back-button:hover, .back-button:focus {
+            background: #1746a0;
+            box-shadow: 0 4px 16px rgba(37,99,235,0.18);
+            color: #fff;
+            outline: none;
+            opacity: 1;
+        }
+        
+        @media (max-width: 575.98px) {
+            .back-button {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation Bar -->
+    <nav class="navbar navbar-expand-lg navbar-dark" style="background: var(--bs-primary);">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="{{ url_for('index') }}">
+                <i class="fas fa-database me-2"></i>
+                SQL Query Optimizer
+            </a>
+            
+            <div class="navbar-nav ms-auto">
+                <a href="{{ url_for('result', share_id=share_id) }}" class="btn btn-outline-light btn-sm">
+                    <i class="fas fa-arrow-left me-1"></i>Back to Analysis
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <!-- AI Insight Header -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="d-flex align-items-center mb-3">
+                    <div class="ai-badge me-3">
+                        <i class="fas fa-robot me-2"></i>AI-Powered Insight
+                    </div>
+                    <h1 class="mb-0">{{ ai_result.title if ai_result else 'AI Analysis' }}</h1>
+                </div>
+                <p class="text-muted">
+                    <i class="fas fa-info-circle me-1"></i>
+                    This analysis is powered by AI and provides context-aware insights based on your SQL query and execution plan.
+                </p>
+            </div>
+        </div>
+
+        {% if ai_result and ai_result.success %}
+        <!-- AI Response -->
+        <div class="row">
+            <div class="col-lg-8">
+                <div class="card">
+                    <div class="section-header">
+                        <i class="fas fa-lightbulb me-2"></i>AI Analysis
+                    </div>
+                    <div class="card-body">
+                        <div class="ai-insight-content">
+                            {{ ai_result.response|safe|replace('\n', '<br>')|replace('```sql', '<pre><code class="language-sql">')|replace('```', '</code></pre>') }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Context Sidebar -->
+            <div class="col-lg-4">
+                <div class="card mb-3">
+                    <div class="section-header">
+                        <i class="fas fa-database me-2"></i>Query Context
+                    </div>
+                    <div class="card-body">
+                        <div class="context-section">
+                            <h6><i class="fas fa-code me-1"></i>SQL Query</h6>
+                            <pre style="font-size: 0.8rem; max-height: 200px; overflow-y: auto;">{{ analysis_data.sql_query }}</pre>
+                        </div>
+                        
+                        <div class="context-section">
+                            <h6><i class="fas fa-server me-1"></i>Database Engine</h6>
+                            <span class="badge bg-primary">{{ analysis_data.db_engine|capitalize }}</span>
+                        </div>
+                        
+                        {% if analysis_data.tables %}
+                        <div class="context-section">
+                            <h6><i class="fas fa-table me-1"></i>Tables ({{ analysis_data.tables|length }})</h6>
+                            <ul class="list-unstyled mb-0">
+                                {% for table in analysis_data.tables %}
+                                <li><i class="fas fa-circle text-primary me-1" style="font-size: 0.5rem;"></i>{{ table.name }}</li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                        {% endif %}
+                        
+                        {% if analysis_data.indexes %}
+                        <div class="context-section">
+                            <h6><i class="fas fa-sort-amount-up me-1"></i>Indexes ({{ analysis_data.indexes|length }})</h6>
+                            <ul class="list-unstyled mb-0">
+                                {% for index in analysis_data.indexes %}
+                                <li><i class="fas fa-circle text-success me-1" style="font-size: 0.5rem;"></i>{{ index.name }}</li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+                
+                <!-- Action Buttons -->
+                <div class="card">
+                    <div class="section-header">
+                        <i class="fas fa-cogs me-2"></i>Actions
+                    </div>
+                    <div class="card-body">
+                        <div class="d-grid gap-2">
+                            <a href="{{ url_for('result', share_id=share_id) }}" class="btn btn-outline-primary">
+                                <i class="fas fa-arrow-left me-1"></i>Back to Full Analysis
+                            </a>
+                            <button class="btn btn-outline-success" onclick="copyToClipboard()">
+                                <i class="fas fa-copy me-1"></i>Copy AI Response
+                            </button>
+                            <button class="btn btn-outline-info" onclick="getAnotherInsight()">
+                                <i class="fas fa-magic me-1"></i>Get Another Insight
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        {% elif ai_result and not ai_result.success %}
+        <!-- AI Error -->
+        <div class="row">
+            <div class="col-12">
+                <div class="ai-error">
+                    <h5><i class="fas fa-exclamation-triangle me-2"></i>AI Analysis Error</h5>
+                    <p>{{ ai_result.error }}</p>
+                    <a href="{{ url_for('result', share_id=share_id) }}" class="btn btn-primary">
+                        <i class="fas fa-arrow-left me-1"></i>Back to Analysis
+                    </a>
+                </div>
+            </div>
+        </div>
+        
+        {% else %}
+        <!-- Loading State -->
+        <div class="row">
+            <div class="col-12">
+                <div class="ai-loading">
+                    <div class="spinner-border text-primary mb-3" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <h5>Generating AI Insight...</h5>
+                    <p class="text-muted">This may take a few moments.</p>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Back Button -->
+    <a href="{{ url_for('result', share_id=share_id) }}" class="btn back-button">
+        <i class="fas fa-arrow-left me-1"></i>Back
+    </a>
+
+    <!-- Bootstrap Bundle with Popper -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <script>
+        function copyToClipboard() {
+            const aiResponse = `{{ ai_result.response if ai_result and ai_result.success else '' }}`;
+            navigator.clipboard.writeText(aiResponse).then(function() {
+                // Show success feedback
+                const button = event.target;
+                const originalText = button.innerHTML;
+                button.innerHTML = '<i class="fas fa-check"></i> Copied!';
+                button.classList.remove('btn-outline-success');
+                button.classList.add('btn-success');
+                
+                setTimeout(() => {
+                    button.innerHTML = originalText;
+                    button.classList.remove('btn-success');
+                    button.classList.add('btn-outline-success');
+                }, 2000);
+            }).catch(function(err) {
+                console.error('Failed to copy: ', err);
+                alert('Failed to copy to clipboard');
+            });
+        }
+        
+        function getAnotherInsight() {
+            // Redirect to a modal or page to select another insight type
+            window.location.href = "{{ url_for('result', share_id=share_id) }}#ai-insights";
+        }
+        
+        // Auto-refresh if still loading
+        {% if not ai_result %}
+        setTimeout(function() {
+            window.location.reload();
+        }, 5000);
+        {% endif %}
+    </script>
+</body>
+</html> 

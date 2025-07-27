@@ -1,851 +1,182 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SQL Optimizer - Help Guide</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <style>
-        :root {
-            --bs-primary: #2563eb;
-            --bs-primary-rgb: 37, 99, 235;
-            --modern-info: #0ea5e9;
-            --modern-success: #22c55e;
-            --modern-warning: #facc15;
-            --modern-danger: #ef4444;
-            --modern-muted: #6c757d;
-            --modern-bg: #f8f9fa;
-        }
-        body {
-            background-color: var(--modern-bg);
-            line-height: 1.6;
-        }
-        .card {
-            border-radius: 0.5rem;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.03);
-            background: #fff;
-            margin-bottom: 1.5rem;
-        }
-        .step-number {
-            background: var(--bs-primary);
-            color: white;
-            width: 2.5rem;
-            height: 2.5rem;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: bold;
-            margin-right: 1rem;
-        }
-        .step-content {
-            flex: 1;
-        }
-        .step-item {
-            display: flex;
-            align-items: flex-start;
-            margin-bottom: 2rem;
-            padding: 1.5rem;
-            background: white;
-            border-radius: 0.5rem;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.03);
-        }
-        .feature-card {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border-radius: 0.5rem;
-            padding: 1.5rem;
-            margin-bottom: 1rem;
-        }
-        .tip-box {
-            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-            color: white;
-            border-radius: 0.5rem;
-            padding: 1rem;
-            margin: 1rem 0;
-        }
-        .warning-box {
-            background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
-            color: #8b4513;
-            border-radius: 0.5rem;
-            padding: 1rem;
-            margin: 1rem 0;
-        }
-        #sticky-back-btn {
-            position: fixed;
-            left: 24px;
-            bottom: 24px;
-            z-index: 2000;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.12);
-            border-radius: 0.5rem;
-            background: #2563eb;
-            color: #fff;
-            font-size: 1.1rem;
-            padding: 0.75em 2em;
-            transition: opacity 0.2s, background 0.2s, box-shadow 0.2s;
-            opacity: 0.4;
-        }
-        #sticky-back-btn:hover, #sticky-back-btn:focus {
-            background: #1746a0;
-            box-shadow: 0 4px 16px rgba(37,99,235,0.18);
-            color: #fff;
-            outline: none;
-            opacity: 1;
-        }
-        @media (max-width: 575.98px) {
-            #sticky-back-btn {
-                display: none;
-            }
-        }
-        .code-example {
-            background: #f8f9fa;
-            border: 1px solid #e9ecef;
-            border-radius: 0.375rem;
-            padding: 1rem;
-            margin: 1rem 0;
-            font-family: 'Courier New', monospace;
-        }
-        
-        /* Smooth scrolling */
-        html {
-            scroll-behavior: smooth;
-        }
-        
-        /* Table of contents link styling */
-        #toc a {
-            color: var(--text-primary);
-            transition: all 0.3s ease;
-            padding: 0.5rem;
-            border-radius: 0.25rem;
-            display: block;
-        }
-        
-        #toc a:hover {
-            background-color: var(--bs-primary);
-            color: white;
-            transform: translateX(5px);
-            text-decoration: none;
-        }
-        
-        /* Section headers with navigation */
-        .card-header a {
-            transition: all 0.3s ease;
-        }
-        
-        .card-header a:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-        }
-        
-        /* Active section highlighting */
-        .section-active {
-            border-left: 4px solid var(--bs-primary);
-            background-color: rgba(37, 99, 235, 0.05);
-        }
-    </style>
-</head>
-<body>
-<div class="container mt-5">
-    <div class="row">
-        <div class="col-lg-8 mx-auto">
-            <!-- Header -->
-            <div class="text-center mb-5">
-                <h1 class="display-4 mb-3">
-                    <i class="fas fa-question-circle text-primary me-3"></i>
-                    SQL Optimizer Help Guide
-                </h1>
-                <p class="lead text-muted">Learn how to use the SQL Optimizer to analyze and improve your database queries</p>
+{% extends "base.html" %}
+
+{% block content %}
+<div class="section-highlight help-highlight">
+    <div class="section-highlight-header">
+        <i class="fas fa-question-circle me-2"></i>
+        <span class="section-highlight-title">Help Guide</span>
+        <span class="section-highlight-subtitle">Learn how to use the SQL Query Optimizer</span>
+    </div>
+    <div class="section-highlight-content">
+        <!-- Getting Started -->
+        <div class="card mb-4">
+            <div class="card-header bg-primary text-white">
+                <h5>How to Use the Optimizer</h5>
             </div>
-
-            <!-- Table of Contents -->
-            <div class="card mb-4" id="toc">
-                <div class="card-header bg-primary text-white">
-                    <h3 class="mb-0"><i class="fas fa-list me-2"></i>Table of Contents</h3>
-                </div>
-                <div class="card-body">
-                    <div class="row">
-                        <div class="col-md-6">
-                            <h5 class="text-primary mb-3"><i class="fas fa-rocket me-2"></i>Getting Started</h5>
-                            <ul class="list-unstyled">
-                                <li class="mb-2">
-                                    <a href="#quick-start" class="text-decoration-none">
-                                        <i class="fas fa-play-circle me-2 text-success"></i>Quick Start Guide
-                                    </a>
-                                </li>
-                                <li class="mb-2">
-                                    <a href="#features" class="text-decoration-none">
-                                        <i class="fas fa-tools me-2 text-warning"></i>Additional Features
-                                    </a>
-                                </li>
-                            </ul>
-                        </div>
-                        <div class="col-md-6">
-                            <h5 class="text-primary mb-3"><i class="fas fa-chart-line me-2"></i>Advanced Features</h5>
-                            <ul class="list-unstyled">
-                                <li class="mb-2">
-                                    <a href="#analytics" class="text-decoration-none">
-                                        <i class="fas fa-chart-bar me-2 text-success"></i>Analytics Dashboard
-                                    </a>
-                                </li>
-                                <li class="mb-2">
-                                    <a href="#comparison" class="text-decoration-none">
-                                        <i class="fas fa-balance-scale me-2 text-info"></i>Query Comparison
-                                    </a>
-                                </li>
-                                <li class="mb-2">
-                                    <a href="#export" class="text-decoration-none">
-                                        <i class="fas fa-download me-2 text-warning"></i>Export Options
-                                    </a>
-                                </li>
-                            </ul>
-                        </div>
-                    </div>
-                    <div class="row mt-3">
-                        <div class="col-md-6">
-                            <h5 class="text-primary mb-3"><i class="fas fa-book me-2"></i>Understanding Results</h5>
-                            <ul class="list-unstyled">
-                                <li class="mb-2">
-                                    <a href="#report" class="text-decoration-none">
-                                        <i class="fas fa-chart-bar me-2 text-success"></i>Analysis Report Guide
-                                    </a>
-                                </li>
-                                <li class="mb-2">
-                                    <a href="#tips" class="text-decoration-none">
-                                        <i class="fas fa-lightbulb me-2 text-info"></i>Tips & Best Practices
-                                    </a>
-                                </li>
-                            </ul>
-                        </div>
-                        <div class="col-md-6">
-                            <h5 class="text-primary mb-3"><i class="fas fa-wrench me-2"></i>Support</h5>
-                            <ul class="list-unstyled">
-                                <li class="mb-2">
-                                    <a href="#troubleshooting" class="text-decoration-none">
-                                        <i class="fas fa-tools me-2 text-warning"></i>Troubleshooting
-                                    </a>
-                                </li>
-                            </ul>
-                        </div>
-                    </div>
-                </div>
+            <div class="card-body">
+                <h6>Quick Start</h6>
+                <ol>
+                    <li>Select your database engine from the dropdown</li>
+                    <li>Click "Load Sample Data" to see how the tool works with example queries</li>
+                    <li>Or enter your own SQL query in the SQL Query section</li>
+                    <li>Add table and index information for better analysis</li>
+                    <li>Paste your EXPLAIN plan or use the "How to Generate EXPLAIN Plan" guide</li>
+                    <li>Click "Analyze Query" to get optimization recommendations</li>
+                </ol>
             </div>
+        </div>
 
-            <!-- Quick Start -->
-            <div class="card" id="quick-start">
-                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
-                    <h3 class="mb-0"><i class="fas fa-rocket me-2"></i>Quick Start Guide</h3>
-                    <a href="#toc" class="btn btn-outline-light btn-sm">
-                        <i class="fas fa-arrow-up me-1"></i>Back to Top
-                    </a>
-                </div>
-                <div class="card-body">
-                    <p>Follow these simple steps to analyze your SQL query and get performance recommendations:</p>
-                    
-                    <div class="step-item">
-                        <div class="step-number">1</div>
-                        <div class="step-content">
-                            <h5>Enter Your SQL Query</h5>
-                            <p>Paste your SQL query into the main text area. The app supports all major SQL dialects including SELECT, INSERT, UPDATE, DELETE statements.</p>
-                            <div class="code-example">
-                                SELECT u.name, p.title, c.comment<br>
-                                FROM users u<br>
-                                JOIN posts p ON u.id = p.user_id<br>
-                                LEFT JOIN comments c ON p.id = c.post_id<br>
-                                WHERE u.active = 1 AND p.published = 1;
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="step-item">
-                        <div class="step-number">2</div>
-                        <div class="step-content">
-                            <h5>Add Table Information (Optional but Recommended)</h5>
-                            <p>For more accurate analysis, provide your table structures. Click the <strong>"Add Table"</strong> button to add each table:</p>
-                            <ul>
-                                <li><strong>Table Name</strong> - The name of your table</li>
-                                <li><strong>DDL</strong> - CREATE TABLE statement or table structure</li>
-                                <li><strong>Row Count</strong> - Approximate number of rows (helps with optimization decisions)</li>
-                                <li><strong>Size</strong> - Table size (e.g., 500MB, 2GB, 1.5TB)</li>
-                            </ul>
-                            <div class="code-example">
-                                CREATE TABLE users (<br>
-                                &nbsp;&nbsp;id INT PRIMARY KEY,<br>
-                                &nbsp;&nbsp;name VARCHAR(100),<br>
-                                &nbsp;&nbsp;email VARCHAR(255) UNIQUE,<br>
-                                &nbsp;&nbsp;active BOOLEAN DEFAULT true<br>
-                                );
-                            </div>
-                            <div class="tip-box">
-                                <h6><i class="fas fa-plus me-2"></i>Adding Multiple Tables</h6>
-                                <p>Click the <strong>"Add Table"</strong> button multiple times to add information for all tables in your query. Each table will appear as a separate form section.</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="step-item">
-                        <div class="step-number">3</div>
-                        <div class="step-content">
-                            <h5>Add Index Information (Optional)</h5>
-                            <p>Include your existing indexes to get better recommendations. Click the <strong>"Add Index"</strong> button for each index:</p>
-                            <ul>
-                                <li><strong>Index Name</strong> - Name of the index</li>
-                                <li><strong>Table</strong> - Table the index belongs to</li>
-                                <li><strong>Definition</strong> - Index definition or columns</li>
-                                <li><strong>Size</strong> - Index size (e.g., 50MB, 200MB)</li>
-                            </ul>
-                            <div class="code-example">
-                                CREATE INDEX idx_users_email ON users(email);<br>
-                                CREATE INDEX idx_posts_user_published ON posts(user_id, published);
-                            </div>
-                            <div class="tip-box">
-                                <h6><i class="fas fa-plus me-2"></i>Adding Multiple Indexes</h6>
-                                <p>Click the <strong>"Add Index"</strong> button multiple times to add information for all indexes. This helps the analyzer understand your current indexing strategy.</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="step-item">
-                        <div class="step-number">4</div>
-                        <div class="step-content">
-                            <h5>Add EXPLAIN Plan (Optional)</h5>
-                            <p>If you have an EXPLAIN plan from your database, paste it here for detailed analysis of the query execution plan.</p>
-                            <div class="code-example">
-                                Seq Scan on users  (cost=0.00..431.00 rows=21000 width=4)<br>
-                                &nbsp;&nbsp;Filter: (status = 'active')
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="step-item">
-                        <div class="step-number">5</div>
-                        <div class="step-content">
-                            <h5>Select Database Engine</h5>
-                            <p>Choose your target database engine from the dropdown. This ensures you get engine-specific optimization tips and syntax recommendations.</p>
-                            <ul>
-                                <li><strong>PostgreSQL</strong> - Advanced features, JSON support, complex queries</li>
-                                <li><strong>MySQL</strong> - Web applications, simple to complex queries</li>
-                                <li><strong>Oracle</strong> - Enterprise applications, complex business logic</li>
-                                <li><strong>SQL Server</strong> - Microsoft ecosystem, business intelligence</li>
-                                <li><strong>SQLite</strong> - Embedded applications, mobile apps</li>
-                            </ul>
-                            <div class="tip-box">
-                                <h6><i class="fas fa-lightbulb me-2"></i>Engine-Specific Tips</h6>
-                                <p>The "Did You Know?" section will show different tips based on your selected database engine!</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="step-item">
-                        <div class="step-number">6</div>
-                        <div class="step-content">
-                            <h5>Analyze Your Query</h5>
-                            <p>Click the "Analyze SQL" button to get your comprehensive performance report.</p>
-                        </div>
-                    </div>
-                </div>
+        <!-- Features -->
+        <div class="card mb-4">
+            <div class="card-header bg-primary text-white">
+                <h5>How to Use the Optimizer</h5>
             </div>
-
-            <!-- Additional Features -->
-            <div class="card" id="features">
-                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
-                    <h3 class="mb-0"><i class="fas fa-tools me-2"></i>Additional Features</h3>
-                    <a href="#toc" class="btn btn-outline-light btn-sm">
-                        <i class="fas fa-arrow-up me-1"></i>Back to Top
-                    </a>
-                </div>
-                <div class="card-body">
-                    <div class="row">
-                        <div class="col-md-6">
-                            <div class="feature-card">
-                                <h5><i class="fas fa-magic me-2"></i>SQL Beautifier</h5>
-                                <p>Click the "Beautify SQL" button to automatically format your SQL query with proper indentation and spacing for better readability.</p>
-                                <div class="code-example">
-                                    <strong>Before:</strong> SELECT id,name FROM users WHERE status='active';<br>
-                                    <strong>After:</strong> SELECT id, name FROM users WHERE status = 'active';
-                                </div>
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="feature-card">
-                                <h5><i class="fas fa-check-circle me-2"></i>SQL Validator</h5>
-                                <p>Real-time SQL syntax validation with visual feedback. The app checks your query syntax and provides immediate feedback on errors.</p>
-                                <div class="tip-box">
-                                    <h6><i class="fas fa-info me-2"></i>Validation Features</h6>
-                                    <ul>
-                                        <li>Syntax error detection</li>
-                                        <li>Keyword highlighting</li>
-                                        <li>Real-time feedback</li>
-                                    </ul>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="feature-card">
-                                <h5><i class="fas fa-download me-2"></i>Sample Data Loader</h5>
-                                <p>Click "Load Sample Data" to populate the form with a best-practice SQL example, complete with tables and indexes for quick testing.</p>
-                                <div class="tip-box">
-                                    <h6><i class="fas fa-lightbulb me-2"></i>Perfect for Testing</h6>
-                                    <p>Use this to understand the expected format and see how the analyzer works with a complete example.</p>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="feature-card">
-                                <h5><i class="fas fa-book me-2"></i>Query Templates Library</h5>
-                                <p>Access a comprehensive library of pre-built SQL templates for common scenarios. Browse templates by category and difficulty level.</p>
-                                <div class="tip-box">
-                                    <h6><i class="fas fa-star me-2"></i>Template Features</h6>
-                                    <ul>
-                                        <li>Ready-to-use SQL queries with best practices</li>
-                                        <li>Complete table definitions with realistic data</li>
-                                        <li>Optimized index recommendations</li>
-                                        <li>Performance tips and explanations</li>
-                                        <li>JSON operations and modern data patterns</li>
-                                        <li>Progressive difficulty levels from Beginner to Expert</li>
-                                    </ul>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="feature-card">
-                                <h5><i class="fas fa-lightbulb me-2"></i>"Did You Know?" Tips</h5>
-                                <p>Rotating database-specific tips that change based on your selected engine. Each database has up to 50 unique optimization tips!</p>
-                                <div class="tip-box">
-                                    <h6><i class="fas fa-star me-2"></i>Unique Feature</h6>
-                                    <p>This is our unique selling point - comprehensive, engine-specific best practices that help you learn while you optimize.</p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Features -->
-            <div class="card" id="step-by-step">
-                <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
-                    <h3 class="mb-0"><i class="fas fa-star me-2"></i>Analysis Features</h3>
-                    <a href="#toc" class="btn btn-outline-light btn-sm">
-                        <i class="fas fa-arrow-up me-1"></i>Back to Top
-                    </a>
-                </div>
-                <div class="card-body">
-                    <div class="row">
-                        <div class="col-md-6">
-                            <div class="feature-card">
-                                <h5><i class="fas fa-lightbulb me-2"></i>Smart Recommendations</h5>
-                                <p>Get specific, actionable recommendations to improve query performance based on your database engine.</p>
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="feature-card">
-                                <h5><i class="fas fa-exclamation-triangle me-2"></i>Performance Warnings</h5>
-                                <p>Identify potential performance issues like missing indexes, inefficient joins, or problematic patterns.</p>
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="feature-card">
-                                <h5><i class="fas fa-code me-2"></i>Optimized Query Suggestions</h5>
-                                <p>Receive rewritten versions of your queries with performance improvements applied.</p>
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="feature-card">
-                                <h5><i class="fas fa-chart-line me-2"></i>EXPLAIN Plan Analysis</h5>
-                                <p>Visualize and analyze query execution plans to understand how your database processes queries.</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Tips and Best Practices -->
-            <div class="card" id="tips">
-                <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
-                    <h3 class="mb-0"><i class="fas fa-lightbulb me-2"></i>Tips & Best Practices</h3>
-                    <a href="#toc" class="btn btn-outline-light btn-sm">
-                        <i class="fas fa-arrow-up me-1"></i>Back to Top
-                    </a>
-                </div>
-                <div class="card-body">
-                    <div class="tip-box">
-                        <h5><i class="fas fa-lightbulb me-2"></i>Pro Tip: Use "Did You Know?" Section</h5>
-                        <p>Check out the rotating database-specific tips in the "Did You Know?" section. These contain valuable insights and best practices for your chosen database engine!</p>
-                    </div>
-
-                    <h5>General SQL Optimization Tips:</h5>
-                    <ul>
-                        <li><strong>Use indexes wisely</strong> - Index columns used in WHERE, JOIN, and ORDER BY clauses</li>
-                        <li><strong>Avoid SELECT *</strong> - Only select the columns you need</li>
-                        <li><strong>Limit result sets</strong> - Use LIMIT/TOP to restrict results</li>
-                        <li><strong>Optimize JOINs</strong> - Use appropriate JOIN types and ensure indexed columns</li>
-                        <li><strong>Use appropriate data types</strong> - Choose the right column types for your data</li>
-                        <li><strong>Consider query patterns</strong> - Design queries based on how they'll be used</li>
-                    </ul>
-
-                    <div class="warning-box">
-                        <h5><i class="fas fa-exclamation-triangle me-2"></i>Important Notes:</h5>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6>SQL Query Analysis</h6>
                         <ul>
-                            <li>This tool provides recommendations based on static analysis. Always test changes in a development environment first.</li>
-                            <li>Performance improvements depend on your specific data distribution and usage patterns.</li>
-                            <li>Some recommendations may not apply to your specific use case - use your judgment.</li>
+                            <li>Syntax validation</li>
+                            <li>SQL beautification</li>
+                            <li>Performance analysis</li>
+                            <li>Index recommendations</li>
+                        </ul>
+                    </div>
+                    <div class="col-md-6">
+                        <h6>EXPLAIN Plan Tools</h6>
+                        <ul>
+                            <li>Visual flowcharts</li>
+                            <li>Cost analysis</li>
+                            <li>Bottleneck detection</li>
+                            <li>Optimization suggestions</li>
                         </ul>
                     </div>
                 </div>
             </div>
+        </div>
 
-            <!-- Understanding the Report -->
-            <div class="card" id="report">
-                <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
-                    <h3 class="mb-0"><i class="fas fa-chart-bar me-2"></i>Understanding Your Analysis Report</h3>
-                    <a href="#toc" class="btn btn-outline-light btn-sm">
-                        <i class="fas fa-arrow-up me-1"></i>Back to Top
-                    </a>
-                </div>
-                <div class="card-body">
-                    <p>After analyzing your SQL query, you'll receive a comprehensive report with several sections:</p>
-                    
-                    <div class="step-item">
-                        <div class="step-number">📊</div>
-                        <div class="step-content">
-                            <h5>Summary Section</h5>
-                            <p>A high-level overview of your query analysis, highlighting key findings and potential issues.</p>
-                            <div class="code-example">
-                                <strong>Example:</strong> "Query uses SELECT *. No WHERE clause detected. Possible missing index on status column."
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="step-item">
-                        <div class="step-number">📋</div>
-                        <div class="step-content">
-                            <h5>Tables Section (if provided)</h5>
-                            <p>Shows the table information you provided, including structure, row counts, and sizes. This helps the analyzer understand your data context.</p>
-                            <div class="tip-box">
-                                <h6><i class="fas fa-info me-2"></i>Collapsible Section</h6>
-                                <p>Click to expand/collapse the tables section to view detailed table information.</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="step-item">
-                        <div class="step-number">🔍</div>
-                        <div class="step-content">
-                            <h5>Indexes Section (if provided)</h5>
-                            <p>Displays your current indexing strategy. The analyzer uses this to suggest missing indexes or optimization opportunities.</p>
-                            <div class="tip-box">
-                                <h6><i class="fas fa-info me-2"></i>Collapsible Section</h6>
-                                <p>Click to expand/collapse the indexes section to view detailed index information.</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="step-item">
-                        <div class="step-number">💡</div>
-                        <div class="step-content">
-                            <h5>Recommendations Section</h5>
-                            <p>Specific, actionable suggestions to improve your query performance. These are prioritized by potential impact.</p>
-                            <div class="code-example">
-                                <strong>Example:</strong> "Consider adding an index on column 'status' used in WHERE clause for better performance."
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="step-item">
-                        <div class="step-number">⚠️</div>
-                        <div class="step-content">
-                            <h5>Warnings Section</h5>
-                            <p>Potential performance issues or problematic patterns that could impact query performance.</p>
-                            <div class="code-example">
-                                <strong>Example:</strong> "Avoid using SELECT *. Specify only the columns you need for better performance."
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="step-item">
-                        <div class="step-number">🔧</div>
-                        <div class="step-content">
-                            <h5>Optimized Query Suggestion</h5>
-                            <p>A rewritten version of your query with performance improvements applied. This shows you exactly how to implement the recommendations.</p>
-                            <div class="code-example">
-                                <strong>Original:</strong> SELECT * FROM users WHERE status = 'active';<br>
-                                <strong>Optimized:</strong> SELECT id, name, email FROM users WHERE status = 'active';
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="step-item">
-                        <div class="step-number">📈</div>
-                        <div class="step-content">
-                            <h5>EXPLAIN Plan Visualization (if provided)</h5>
-                            <p>If you provided an EXPLAIN plan, this section shows a visual representation of how your database executes the query.</p>
-                            <div class="tip-box">
-                                <h6><i class="fas fa-chart-line me-2"></i>Visual Analysis</h6>
-                                <p>Use this to understand the query execution flow and identify bottlenecks in your database's processing.</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="step-item">
-                        <div class="step-number">📚</div>
-                        <div class="step-content">
-                            <h5>Recent Analyses History</h5>
-                            <p>Shows your last 5 analyses with the ability to re-run or edit previous queries. This helps you track your optimization progress.</p>
-                            <div class="tip-box">
-                                <h6><i class="fas fa-history me-2"></i>History Features</h6>
-                                <ul>
-                                    <li><strong>Re-run Analysis:</strong> Execute the same analysis again</li>
-                                    <li><strong>Edit:</strong> Modify the query and re-analyze</li>
-                                    <li><strong>View Details:</strong> Expand to see full analysis results</li>
-                                </ul>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+        <!-- Database Support -->
+        <div class="card mb-4">
+            <div class="card-header bg-primary text-white">
+                <h5>How to Use the Optimizer</h5>
             </div>
-
-            <!-- Analytics Dashboard -->
-            <div class="card mb-4" id="analytics">
-                <div class="card-header bg-warning text-dark d-flex justify-content-between align-items-center">
-                    <h3 class="mb-0"><i class="fas fa-chart-bar me-2"></i>Analytics Dashboard</h3>
-                    <a href="#toc" class="btn btn-outline-dark btn-sm">
-                        <i class="fas fa-arrow-up me-1"></i>Back to Top
-                    </a>
-                </div>
-                <div class="card-body">
-                    <h5>Overview</h5>
-                    <p>The Analytics Dashboard provides comprehensive insights into your SQL query performance over time, helping you identify trends, patterns, and optimization opportunities.</p>
-                    
-                    <h5>Features</h5>
-                    <ul>
-                        <li><strong>Performance Metrics:</strong> Average scores, complexity, and optimization potential</li>
-                        <li><strong>Database Distribution:</strong> See which database engines you use most</li>
-                        <li><strong>Complexity Analysis:</strong> Distribution of query complexity levels</li>
-                        <li><strong>Trend Visualization:</strong> Performance trends over time with interactive charts</li>
-                        <li><strong>Pattern Recognition:</strong> Common SQL patterns and usage statistics</li>
-                        <li><strong>Actionable Insights:</strong> AI-generated recommendations for improvement</li>
-                        <li><strong>Interactive Charts:</strong> Visual representations using Chart.js</li>
-                    </ul>
-                    
-                    <h5>How to Access</h5>
-                    <ol>
-                        <li>Click the <strong>"Analytics"</strong> button on the main page or result page</li>
-                        <li>View comprehensive analytics after analyzing multiple queries</li>
-                        <li>Explore different chart sections for detailed insights</li>
-                        <li>Use insights to improve your query writing practices</li>
-                    </ol>
-                    
-                    <h5>Dashboard Sections</h5>
-                    <ul>
-                        <li><strong>Key Metrics:</strong> Total analyses, average performance, complexity, and optimization potential</li>
-                        <li><strong>Actionable Insights:</strong> AI-generated recommendations based on your query patterns</li>
-                        <li><strong>Database Distribution:</strong> Pie chart showing your preferred database engines</li>
-                        <li><strong>Complexity Distribution:</strong> Bar chart of query complexity levels</li>
-                        <li><strong>Performance Trends:</strong> Line charts showing performance over time</li>
-                        <li><strong>Common Patterns:</strong> Statistics on SQL patterns like SELECT *, JOINs, aggregations</li>
-                        <li><strong>Performance Range:</strong> Best and worst performing queries</li>
-                    </ul>
-                    
-                    <h5>Insights Types</h5>
-                    <ul>
-                        <li><strong>Performance Insights:</strong> Based on average scores and trends</li>
-                        <li><strong>Pattern Insights:</strong> Analysis of common SQL patterns and anti-patterns</li>
-                        <li><strong>Database Insights:</strong> Recommendations based on your primary database</li>
-                        <li><strong>Complexity Insights:</strong> Suggestions for managing query complexity</li>
-                    </ul>
-                </div>
-            </div>
-
-            <!-- Query Comparison -->
-            <div class="card mb-4" id="comparison">
-                <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
-                    <h3 class="mb-0"><i class="fas fa-balance-scale me-2"></i>Query Comparison</h3>
-                    <a href="#toc" class="btn btn-outline-light btn-sm">
-                        <i class="fas fa-arrow-up me-1"></i>Back to Top
-                    </a>
-                </div>
-                <div class="card-body">
-                    <h5>Overview</h5>
-                    <p>The Query Comparison feature allows you to compare multiple SQL queries side-by-side, providing detailed performance analysis, rankings, and optimization recommendations.</p>
-                    
-                    <h5>Features</h5>
-                    <ul>
-                        <li><strong>Multi-Query Analysis:</strong> Compare up to 5 queries simultaneously</li>
-                        <li><strong>Performance Rankings:</strong> See which queries perform best</li>
-                        <li><strong>Complexity Comparison:</strong> Compare query complexity scores</li>
-                        <li><strong>Resource Usage:</strong> Analyze memory and CPU usage differences</li>
-                        <li><strong>Optimization Potential:</strong> Identify which queries need optimization</li>
-                        <li><strong>Key Differences:</strong> Highlight significant performance gaps</li>
-                        <li><strong>Smart Recommendations:</strong> Get specific optimization advice</li>
-                    </ul>
-                    
-                    <h5>How to Use</h5>
-                    <ol>
-                        <li>Click the <strong>"Compare"</strong> button on the main page or result page</li>
-                        <li>Enter 2-5 SQL queries you want to compare</li>
-                        <li>Select the appropriate database engine for each query</li>
-                        <li>Click <strong>"Compare Queries"</strong> to analyze</li>
-                        <li>Review the comprehensive comparison results</li>
-                    </ol>
-                    
-                    <h5>Comparison Results</h5>
-                    <ul>
-                        <li><strong>Performance Rankings:</strong> Queries ranked by execution time and efficiency</li>
-                        <li><strong>Complexity Rankings:</strong> Queries ranked by complexity score</li>
-                        <li><strong>Key Differences:</strong> Highlighted performance gaps between queries</li>
-                        <li><strong>Recommendations:</strong> Specific optimization suggestions for each query</li>
-                        <li><strong>Interactive Charts:</strong> Visual comparison of performance metrics</li>
-                        <li><strong>Individual Analysis:</strong> Detailed breakdown for each query</li>
-                    </ul>
-                    
-                    <h5>Use Cases</h5>
-                    <ul>
-                        <li><strong>Query Optimization:</strong> Compare different versions of the same query</li>
-                        <li><strong>Performance Testing:</strong> Test different approaches to the same problem</li>
-                        <li><strong>Code Review:</strong> Evaluate multiple query implementations</li>
-                        <li><strong>Learning:</strong> Understand performance differences between query patterns</li>
-                        <li><strong>Decision Making:</strong> Choose the best query for production use</li>
-                    </ul>
-                </div>
-            </div>
-
-            <!-- Export Options -->
-            <div class="card" id="export">
-                <div class="card-header bg-warning text-dark d-flex justify-content-between align-items-center">
-                    <h3 class="mb-0"><i class="fas fa-download me-2"></i>Exporting Results</h3>
-                    <a href="#toc" class="btn btn-outline-dark btn-sm">
-                        <i class="fas fa-arrow-up me-1"></i>Back to Top
-                    </a>
-                </div>
-                <div class="card-body">
-                    <p>After analysis, you can export your results in multiple formats using the "Export" dropdown in the top-right corner:</p>
-                    <ul>
-                        <li><strong>Current Report (JSON)</strong> - Complete report data for programmatic use</li>
-                        <li><strong>Current Report (CSV)</strong> - Tabular format for spreadsheet analysis</li>
-                        <li><strong>Current Report (Markdown)</strong> - Formatted text for documentation</li>
-                        <li><strong>All History (JSON)</strong> - Export all your analysis history</li>
-                        <li><strong>All History (CSV)</strong> - History in spreadsheet format</li>
-                    </ul>
-                    <div class="tip-box">
-                        <h6><i class="fas fa-info me-2"></i>Export Tips</h6>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-4">
+                        <h6>PostgreSQL</h6>
                         <ul>
-                            <li>Use JSON for integration with other tools</li>
-                            <li>Use CSV for sharing with non-technical stakeholders</li>
-                            <li>Use Markdown for documentation or reports</li>
+                            <li>Version 9.6 and above</li>
+                            <li>EXPLAIN ANALYZE support</li>
+                            <li>Index analysis</li>
+                        </ul>
+                    </div>
+                    <div class="col-md-4">
+                        <h6>MySQL</h6>
+                        <ul>
+                            <li>Version 5.7 and above</li>
+                            <li>EXPLAIN FORMAT=JSON</li>
+                            <li>Index analysis</li>
+                        </ul>
+                    </div>
+                    <div class="col-md-4">
+                        <h6>SQL Server</h6>
+                        <ul>
+                            <li>Version 2016 and above</li>
+                            <li>Execution plans</li>
+                            <li>Index analysis</li>
                         </ul>
                     </div>
                 </div>
             </div>
+        </div>
 
-            <!-- Troubleshooting -->
-            <div class="card" id="troubleshooting">
-                <div class="card-header bg-secondary text-white d-flex justify-content-between align-items-center">
-                    <h3 class="mb-0"><i class="fas fa-tools me-2"></i>Troubleshooting</h3>
-                    <a href="#toc" class="btn btn-outline-light btn-sm">
-                        <i class="fas fa-arrow-up me-1"></i>Back to Top
-                    </a>
-                </div>
-                <div class="card-body">
-                    <h5>Common Issues:</h5>
-                    <ul>
-                        <li><strong>Query not recognized</strong> - Ensure your SQL syntax is valid for the selected database engine</li>
-                        <li><strong>Limited recommendations</strong> - Add table and index information for more detailed analysis</li>
-                        <li><strong>Export not working</strong> - Make sure you have a report generated before trying to export</li>
-                    </ul>
+        <!-- Tips & Best Practices -->
+        <div class="card mb-4">
+            <div class="card-header bg-primary text-white">
+                <h5>How to Use the Optimizer</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6>For Best Results</h6>
+                        <ul>
+                            <li>Provide accurate table information</li>
+                            <li>Include all relevant indexes</li>
+                            <li>Use actual EXPLAIN plans</li>
+                            <li>Keep table statistics up to date</li>
+                        </ul>
+                    </div>
+                    <div class="col-md-6">
+                        <h6>Common Issues</h6>
+                        <ul>
+                            <li>Missing table information</li>
+                            <li>Incorrect EXPLAIN format</li>
+                            <li>Outdated statistics</li>
+                            <li>Incomplete index information</li>
+                        </ul>
+                    </div>
                 </div>
             </div>
+        </div>
 
-            <!-- Navigation -->
-            <div class="text-center mt-5" id="navigation">
-                <a href="/" class="btn btn-primary btn-lg me-3">
-                    <i class="fas fa-arrow-left me-2"></i>Back to SQL Optimizer
-                </a>
-                <a href="/" class="btn btn-success btn-lg">
-                    <i class="fas fa-play me-2"></i>Start Analyzing
-                </a>
+        <!-- FAQ -->
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="fas fa-question me-2"></i>Frequently Asked Questions</h5>
+            </div>
+            <div class="card-body">
+                <div class="accordion" id="faqAccordion">
+                    <div class="accordion-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#faq1">
+                                How do I generate an EXPLAIN plan?
+                            </button>
+                        </h2>
+                        <div id="faq1" class="accordion-collapse collapse show" data-bs-parent="#faqAccordion">
+                            <div class="accordion-body">
+                                Click the "How to Generate EXPLAIN Plan" button in the EXPLAIN Plan section. It will show you the exact command to use for your selected database engine.
+                            </div>
+                        </div>
+                    </div>
+                    <div class="accordion-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq2">
+                                What format should my CSV files be in?
+                            </button>
+                        </h2>
+                        <div id="faq2" class="accordion-collapse collapse" data-bs-parent="#faqAccordion">
+                            <div class="accordion-body">
+                                Click the "CSV Import Help" button to see the required format for table and index CSV files.
+                            </div>
+                        </div>
+                    </div>
+                    <div class="accordion-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq3">
+                                How do I share my analysis results?
+                            </button>
+                        </h2>
+                        <div id="faq3" class="accordion-collapse collapse" data-bs-parent="#faqAccordion">
+                            <div class="accordion-body">
+                                After analyzing a query, use the "Share" button on the results page to get a shareable link.
+                            </div>
+                        </div>
+                    </div>
+                    <div class="accordion-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq4">
+                                How do I compare multiple queries?
+                            </button>
+                        </h2>
+                        <div id="faq4" class="accordion-collapse collapse" data-bs-parent="#faqAccordion">
+                            <div class="accordion-body">
+                                Use the "Compare" button in the top navigation to access the query comparison tool.
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
 </div>
-
-<!-- Sticky Back Button -->
-<a href="/" id="sticky-back-btn" class="btn btn-primary btn-lg" aria-label="Back to SQL Input" title="Back to SQL Input">
-    <i class="fas fa-arrow-left me-2"></i>Back to Analyzer
-</a>
-
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-<script>
-    // Enhanced navigation functionality
-    document.addEventListener('DOMContentLoaded', function() {
-        // Add click handlers for table of contents links
-        const tocLinks = document.querySelectorAll('#toc a');
-        tocLinks.forEach(link => {
-            link.addEventListener('click', function(e) {
-                e.preventDefault();
-                const targetId = this.getAttribute('href').substring(1);
-                const targetElement = document.getElementById(targetId);
-                
-                if (targetElement) {
-                    // Smooth scroll to target
-                    targetElement.scrollIntoView({
-                        behavior: 'smooth',
-                        block: 'start'
-                    });
-                    
-                    // Highlight the target section briefly
-                    targetElement.classList.add('section-active');
-                    setTimeout(() => {
-                        targetElement.classList.remove('section-active');
-                    }, 2000);
-                }
-            });
-        });
-        
-        // Add scroll spy functionality to highlight current section
-        const sections = document.querySelectorAll('.card[id]');
-        const navLinks = document.querySelectorAll('#toc a');
-        
-        window.addEventListener('scroll', function() {
-            let current = '';
-            const scrollPos = window.scrollY + 100;
-            
-            sections.forEach(section => {
-                const sectionTop = section.offsetTop;
-                const sectionHeight = section.offsetHeight;
-                
-                if (scrollPos >= sectionTop && scrollPos < sectionTop + sectionHeight) {
-                    current = section.getAttribute('id');
-                }
-            });
-            
-            // Update active link in table of contents
-            navLinks.forEach(link => {
-                link.classList.remove('active');
-                if (link.getAttribute('href') === '#' + current) {
-                    link.classList.add('active');
-                    link.style.backgroundColor = 'var(--bs-primary)';
-                    link.style.color = 'white';
-                } else {
-                    link.style.backgroundColor = '';
-                    link.style.color = '';
-                }
-            });
-        });
-        
-        // Add keyboard navigation support
-        document.addEventListener('keydown', function(e) {
-            if (e.key === 'Home') {
-                e.preventDefault();
-                document.getElementById('toc').scrollIntoView({ behavior: 'smooth' });
-            }
-        });
-        
-        // Add tooltips for better UX
-        const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-        tooltipTriggerList.forEach(function(el) {
-            new bootstrap.Tooltip(el);
-        });
-    });
-</script>
-</body>
-</html> 
+{% endblock %} 

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="section-highlight error-highlight">
+    <div class="section-highlight-header">
+        <i class="fas fa-exclamation-triangle me-2"></i>
+        <span class="section-highlight-title">Session Expired</span>
+    </div>
+    <div class="section-highlight-content">
+        <p class="mb-4">Your session has expired. Please refresh the page and try again.</p>
+        <a href="{{ url_for('index') }}" class="btn btn-primary">
+            <i class="fas fa-home me-2"></i>
+            Return to Home
+        </a>
+    </div>
+</div>
+{% endblock %} 

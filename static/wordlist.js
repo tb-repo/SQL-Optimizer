@@ -46,3 +46,30 @@ const reserved_words = [
 	"USER",	"USING",	"VALUE",	"VALUES",	"VARCHAR",	"VARYING",	"VIEW",	"WHEN",	"WHENEVER",	"WHERE",
 	"WITH",	"WORK",	"WRITE",	"YEAR",	"ZONE"
 ]
+reserved_words.push(
+  'OVER',
+  'PARTITION',
+  'ROW_NUMBER',
+  'RANK',
+  'DENSE_RANK',
+  'LAG',
+  'LEAD',
+  'NTILE',
+  'FIRST_VALUE',
+  'LAST_VALUE',
+  'NTH_VALUE',
+  'CUME_DIST',
+  'PERCENT_RANK',
+  'PERCENTILE_CONT',
+  'PERCENTILE_DISC',
+  'UNBOUNDED',
+  'PRECEDING',
+  'FOLLOWING',
+  'CURRENT_ROW',
+  'ROWS',
+  'RANGE',
+  'GROUPS',
+  'RESPECT',
+  'IGNORE',
+  'NULLS'
+);
