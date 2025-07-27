@@ -1,4 +1,4 @@
-﻿from flask import Flask, render_template, request, redirect, url_for, flash, session, make_response, Response, jsonify
+from flask import Flask, render_template, request, redirect, url_for, flash, session, make_response, Response, jsonify
 from flask_wtf import FlaskForm
 from wtforms import TextAreaField, SubmitField, SelectField
 from wtforms.validators import DataRequired
@@ -12,8 +12,6 @@ import re
 from io import StringIO
 import sqlparse
 from explain_keywords import EXPLAIN_KEYWORDS
-import traceback
-import html
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'change_this_secret_key')
@@ -474,7 +472,7 @@ def analyze_postgresql(sql_query, tables, indexes, explain_plan=None):
     warnings = list(dict.fromkeys(warnings))
     summary = list(dict.fromkeys(summary))
     if not recommendations:
-        recommendations = [{'text': 'No actionable recommendations ðŸŽ‰', 'actionable': False, 'sub': [], 'key': ('none',)}]
+        recommendations = [{'text': 'No actionable recommendations 🎉', 'actionable': False, 'sub': [], 'key': ('none',)}]
     if not summary:
         summary = ['No summary available for this query.']
     actionable_keys_count = 0
@@ -681,7 +679,7 @@ def analyze_oracle(sql_query, tables, indexes, explain_plan=None):
     warnings = list(dict.fromkeys(warnings))
     summary = list(dict.fromkeys(summary))
     if not recommendations:
-        recommendations = [{'text': 'No actionable recommendations ðŸŽ‰', 'actionable': False, 'sub': [], 'key': ('none',)}]
+        recommendations = [{'text': 'No actionable recommendations 🎉', 'actionable': False, 'sub': [], 'key': ('none',)}]
     if not summary:
         summary = ['No summary available for this query.']
     actionable_keys_count = 0
@@ -1096,7 +1094,7 @@ def calculate_comparison_metrics(comparison_results):
         # Generate recommendations based on categories
         if well_optimized:
             well_opt_queries = [f"Query {q['index']}" for q in well_optimized]
-            recommendations.append(f"{', '.join(well_opt_queries)} {'is' if len(well_optimized) == 1 else 'are'} well-optimized (â‰¤25% improvement potential).")
+            recommendations.append(f"{', '.join(well_opt_queries)} {'is' if len(well_optimized) == 1 else 'are'} well-optimized (≤25% improvement potential).")
         
         if minor_improvements:
             minor_queries = [f"Query {q['index']}" for q in minor_improvements]
@@ -1474,174 +1472,19 @@ def beautify_sql():
         return jsonify({'error': 'Invalid request or JSON: ' + str(e)}), 400
 
 def parse_explain_to_json(explain_plan, db_engine):
-    """Parse explain plan with format detection and routing"""
     if not explain_plan:
         return None
     
-    # Auto-detect format
-    detected_format = detect_explain_format(explain_plan)
-    
-    # Route to appropriate parser based on engine and format
     if db_engine == 'postgresql':
-        if detected_format == 'json':
-            return parse_postgresql_json(explain_plan)
-        elif detected_format == 'xml':
-            return parse_postgresql_xml(explain_plan)
-        elif detected_format == 'postgresql_text':
-            return parse_postgresql_text(explain_plan)
-        else:
-            return parse_postgresql_text(explain_plan)  # fallback
+        return parse_postgresql_explain_flow(explain_plan)
     elif db_engine == 'oracle':
-        if detected_format == 'oracle':
-            return parse_oracle_explain_flow(explain_plan)
-        else:
-            return parse_oracle_explain_flow(explain_plan)  # fallback
+        return parse_oracle_explain_flow(explain_plan)
     elif db_engine == 'sqlserver':
-        if detected_format == 'sqlserver':
-            return parse_sqlserver_explain_flow(explain_plan)
-        elif detected_format == 'xml':
-            return parse_sqlserver_xml(explain_plan)
-        else:
-            return parse_sqlserver_explain_flow(explain_plan)  # fallback
-    
+        return parse_sqlserver_explain_flow(explain_plan)
     return None
 
-def detect_engine_from_explain(explain_plan):
-    if not explain_plan:
-        return None
-    plan = explain_plan.strip().lower()
-    # SQL Server: |--, Clustered Index Scan, Hash Match, Nested Loops, etc.
-    if '|--' in plan or 'clustered index scan' in plan or 'hash match' in plan or 'nested loops' in plan:
-        return 'sqlserver'
-    # Oracle: pipe format, TABLE ACCESS FULL, COST (%CPU)
-    if 'table access full' in plan or 'cost (%cpu)' in plan or '| id  | operation' in plan:
-        return 'oracle'
-    # MySQL: id, select_type, table, type, rows, Extra
-    if 'select_type' in plan and 'rows' in plan and 'extra' in plan:
-        return 'mysql'
-    if '| id |' in plan and '| table |' in plan:
-        return 'mysql'
-    # PostgreSQL: Seq Scan, Index Scan, cost=, width=
-    if 'seq scan' in plan or 'index scan' in plan or 'cost=' in plan or 'width=' in plan:
-        return 'postgresql'
-    # SQLite: SCAN TABLE, SEARCH TABLE
-    if 'scan table' in plan or 'search table' in plan:
-        return 'sqlite'
-    return None
-
-def detect_explain_format(explain_plan):
-    if not explain_plan:
-        return 'unknown'
-    plan_text = explain_plan.strip()
-    # SQL Server tree format (prioritize this check)
-    if '|--' in plan_text or 'Clustered Index Scan' in plan_text or 'Hash Match' in plan_text or 'Nested Loops' in plan_text:
-        return 'sqlserver'
-    # Check for JSON format
-    if (plan_text.startswith('[') and plan_text.endswith(']')) or \
-       (plan_text.startswith('{') and plan_text.endswith('}')):
-        try:
-            json.loads(plan_text)
-            return 'json'
-        except json.JSONDecodeError:
-            pass
-    # Check for XML format (SQL Server ShowPlanXML)
-    if plan_text.startswith('<') or '<RelOp' in plan_text or '<ShowPlanXML' in plan_text:
-        return 'xml'
-    # Check for SQL Server specific formats (table style)
-    if any(keyword in plan_text for keyword in [
-        'StmtText', 'PhysicalOp', 'LogicalOp', 'EstimateRows', 'EstimateIO', 'EstimateCPU', 'TotalSubtreeCost',
-        'HashAggregate', 'NodeId', 'PhysicalOp=', 'LogicalOp=', 'EstimateRows='
-    ]):
-        return 'sqlserver'
-    # Check for PostgreSQL text format (has indentation and -> markers)
-    if '->' in plan_text or 'Planning Time:' in plan_text or 'Execution Time:' in plan_text:
-        return 'postgresql_text'
-    # Check for Oracle format (pipe-delimited or table format)
-    if '|' in plan_text and ('Id' in plan_text or 'OPERATION' in plan_text):
-        return 'oracle'
-    # Default to text format
-    return 'text'
-
-def parse_postgresql_json(explain_plan):
-    """Parse PostgreSQL JSON format - richest data source"""
-    try:
-        data = json.loads(explain_plan)
-        return extract_from_postgresql_json(data)
-    except json.JSONDecodeError as e:
-        print(f"JSON parsing error: {e}")
-        return None
-
-def extract_from_postgresql_json(data):
-    """Extract execution tree from PostgreSQL JSON format"""
-    if not data or not isinstance(data, list) or len(data) == 0:
-        return None
-    
-    # PostgreSQL JSON format: [{"Plan": {...}}]
-    plan_data = data[0].get('Plan', {})
-    
-    execution_tree = {
-        'operation': 'Query Execution Plan',
-        'cost': 0,
-        'rows': 0,
-        'time': 0,
-        'buffers': {},
-        'children': []
-    }
-    
-    def extract_node_data(node):
-        """Extract metrics from a JSON node"""
-        node_data = {
-            'operation': node.get('Node Type', 'Unknown Operation'),
-            'cost': node.get('Total Cost', 0),
-            'startup_cost': node.get('Startup Cost', 0),
-            'rows': node.get('Actual Rows', node.get('Plan Rows', 0)),
-            'time': node.get('Actual Total Time', 0),
-            'buffers': node.get('Buffers', {}),
-            'children': []
-        }
-        
-        # Add relation name if available
-        if node.get('Relation Name'):
-            node_data['operation'] += f" on {node.get('Relation Name')}"
-        
-        # Add index name if available
-        if node.get('Index Name'):
-            node_data['operation'] += f" using {node.get('Index Name')}"
-        
-        # Add scan direction if available
-        if node.get('Scan Direction'):
-            node_data['operation'] += f" ({node.get('Scan Direction')})"
-        
-        # Add filter conditions if available
-        if node.get('Filter'):
-            node_data['filter'] = node.get('Filter')
-        
-        # Add join conditions if available
-        if node.get('Hash Cond'):
-            node_data['join_condition'] = node.get('Hash Cond')
-        
-        # Process children
-        if 'Plans' in node:
-            for child in node['Plans']:
-                child_data = extract_node_data(child)
-                node_data['children'].append(child_data)
-        
-        return node_data
-    
-    # Extract the main plan
-    main_plan = extract_node_data(plan_data)
-    execution_tree.update(main_plan)
-    
-    return execution_tree
-
-def parse_postgresql_xml(explain_plan):
-    """Parse PostgreSQL XML format"""
-    # TODO: Implement XML parsing for PostgreSQL
-    # For now, fallback to text parsing
-    return parse_postgresql_text(explain_plan)
-
-def parse_postgresql_text(explain_plan):
-    """Parse PostgreSQL TEXT format - enhanced version"""
+def parse_postgresql_explain_flow(explain_plan):
+    """Parse PostgreSQL EXPLAIN plan to show actual execution flow"""
     lines = explain_plan.strip().split('\n')
     
     # Skip header lines
@@ -1660,7 +1503,6 @@ def parse_postgresql_text(explain_plan):
         'cost': 0,
         'rows': 0,
         'time': 0,
-        'buffers': {},
         'children': []
     }
     
@@ -1684,7 +1526,7 @@ def parse_postgresql_text(explain_plan):
                 line = line[2:]
         
         # Parse operation and metrics
-        operation, metrics = parse_enhanced_postgresql_line(line)
+        operation, metrics = parse_operation_line(line)
         
         if not operation:
             continue
@@ -1695,7 +1537,6 @@ def parse_postgresql_text(explain_plan):
             'cost': metrics.get('cost', 0),
             'rows': metrics.get('rows', 0),
             'time': metrics.get('time', 0),
-            'buffers': metrics.get('buffers', {}),
             'children': []
         }
         
@@ -1713,334 +1554,221 @@ def parse_postgresql_text(explain_plan):
     
     return execution_tree
 
-def parse_enhanced_postgresql_line(line):
-    """Enhanced PostgreSQL line parser with better metric extraction"""
-    # Remove any trailing comments
-    if '--' in line:
-        line = line.split('--')[0]
+def parse_oracle_explain_flow(explain_plan):
+    """Parse Oracle EXPLAIN PLAN output with enhanced format support"""
+    lines = explain_plan.strip().split('\n')
     
-    # Extract operation name (everything before the first parenthesis)
-    operation_match = re.match(r'^([^(]+)', line.strip())
-    if not operation_match:
-        return None, {}
+    # Skip header lines
+    skip_patterns = ['---', 'Execution Plan', 'Plan hash value', 'Note']
+    filtered_lines = []
+    for line in lines:
+        if not any(pattern in line for pattern in skip_patterns) and line.strip():
+            filtered_lines.append(line)
     
-    operation = operation_match.group(1).strip()
+    if not filtered_lines:
+        return None
+    
+    execution_tree = {
+        'operation': 'Oracle Query Execution Plan',
+        'cost': 0,
+        'rows': 0,
+        'time': 0,
+        'buffers': {},
+        'children': []
+    }
+    
+    # Parse based on format type
+    if '|' in filtered_lines[0] and 'Id' in filtered_lines[0]:
+        # Pipe-delimited format
+        return parse_oracle_pipe_format(filtered_lines, execution_tree)
+    else:
+        # Tree format
+        return parse_oracle_tree_format(filtered_lines, execution_tree)
+
+def parse_oracle_pipe_format(lines, execution_tree):
+    """Parse Oracle pipe-delimited format"""
+    # Skip header line
+    data_lines = []
+    for line in lines[1:]:
+        if line.strip() and '|' in line:
+            data_lines.append(line)
+    
+    # Parse each line
+    nodes = []
+    for line in data_lines:
+        parts = [part.strip() for part in line.split('|')]
+        if len(parts) >= 6:
+            node = {
+                'id': int(parts[0]) if parts[0].isdigit() else 0,
+                'operation': parts[1],
+                'name': parts[2],
+                'rows': int(parts[3]) if parts[3].isdigit() else 0,
+                'bytes': int(parts[4]) if parts[4].isdigit() else 0,
+                'cost': float(parts[5]) if parts[5].replace('.', '').isdigit() else 0,
+                'children': []
+            }
+            nodes.append(node)
+    
+    # Build hierarchy based on ID relationships
+    return build_oracle_hierarchy(nodes, execution_tree)
+
+def parse_oracle_tree_format(lines, execution_tree):
+    """Parse Oracle tree format"""
+    # Stack to track parent nodes based on indentation
+    node_stack = [execution_tree]
+    indent_stack = [-1]
+    
+    for line in lines:
+        if not line.strip():
+            continue
+        
+        # Calculate indentation level
+        indent_level = 0
+        while line.startswith('  '):
+            indent_level += 1
+            line = line[2:]
+        
+        # Parse operation and metrics
+        operation, metrics = parse_enhanced_oracle_line(line)
+        
+        if not operation:
+            continue
+        
+        # Create node
+        node = {
+            'operation': operation,
+            'cost': metrics.get('cost', 0),
+            'rows': metrics.get('rows', 0),
+            'bytes': metrics.get('bytes', 0),
+            'time': metrics.get('time', 0),
+            'children': []
+        }
+        
+        # Find the correct parent based on indentation
+        while len(indent_stack) > 1 and indent_level <= indent_stack[-1]:
+            node_stack.pop()
+            indent_stack.pop()
+        
+        # Add to current parent
+        node_stack[-1]['children'].append(node)
+        
+        # Push this node onto stack for potential children
+        node_stack.append(node)
+        indent_stack.append(indent_level)
+    
+    return execution_tree
+
+def parse_enhanced_oracle_line(line):
+    """Parse a single Oracle operation line with enhanced metrics"""
+    line = line.strip()
     
     # Extract metrics from parentheses
     metrics = {}
+    operation = line
     
-    # Cost pattern: (cost=0.00..431.00 rows=21000 width=4)
-    cost_match = re.search(r'cost=([0-9.]+)\.\.([0-9.]+)', line)
+    # Look for cost information
+    cost_match = re.search(r'cost=(\d+(?:\.\d+)?)', line, re.IGNORECASE)
     if cost_match:
-        metrics['startup_cost'] = float(cost_match.group(1))
-        metrics['total_cost'] = float(cost_match.group(2))
-        metrics['cost'] = metrics['total_cost']
+        metrics['cost'] = float(cost_match.group(1))
     
-    # Rows pattern: rows=21000
-    rows_match = re.search(r'rows=([0-9]+)', line)
+    # Look for rows information
+    rows_match = re.search(r'rows=(\d+)', line, re.IGNORECASE)
     if rows_match:
         metrics['rows'] = int(rows_match.group(1))
     
-    # Width pattern: width=4
-    width_match = re.search(r'width=([0-9]+)', line)
-    if width_match:
-        metrics['width'] = int(width_match.group(1))
+    # Look for bytes information
+    bytes_match = re.search(r'bytes=(\d+)', line, re.IGNORECASE)
+    if bytes_match:
+        metrics['bytes'] = int(bytes_match.group(1))
     
-    # Time pattern: actual time=0.123..0.456
-    time_match = re.search(r'actual time=([0-9.]+)\.\.([0-9.]+)', line)
+    # Look for time information
+    time_match = re.search(r'time=(\d+(?:\.\d+)?)', line, re.IGNORECASE)
     if time_match:
-        metrics['actual_startup_time'] = float(time_match.group(1))
-        metrics['actual_total_time'] = float(time_match.group(2))
-        metrics['time'] = metrics['actual_total_time']
+        metrics['time'] = float(time_match.group(1))
     
-    # Buffer pattern: Buffers: shared hit=123 read=456
-    buffer_match = re.search(r'Buffers: (.+)', line)
-    if buffer_match:
-        buffer_str = buffer_match.group(1)
-        metrics['buffers'] = parse_buffer_info(buffer_str)
+    # Clean up operation name
+    if ' (cost=' in line:
+        operation = line.split(' (cost=')[0].strip()
+    
+    # Clean up operation name
+    operation = operation.replace('_', ' ').title()
     
     return operation, metrics
 
-def parse_buffer_info(buffers_str):
-    """Parse buffer information from PostgreSQL explain output"""
-    buffers = {}
+def build_oracle_hierarchy(nodes, execution_tree):
+    """Build Oracle hierarchy based on ID relationships"""
+    # Sort nodes by ID
+    nodes.sort(key=lambda x: x['id'])
     
-    # Extract different buffer types
-    hit_match = re.search(r'shared hit=([0-9]+)', buffers_str)
-    if hit_match:
-        buffers['shared_hit'] = int(hit_match.group(1))
+    # Create a map of nodes by ID
+    node_map = {node['id']: node for node in nodes}
     
-    read_match = re.search(r'shared read=([0-9]+)', buffers_str)
-    if read_match:
-        buffers['shared_read'] = int(read_match.group(1))
+    # Find root nodes (nodes with no parent or parent ID < current ID)
+    root_nodes = []
+    for node in nodes:
+        is_root = True
+        for other_node in nodes:
+            if other_node['id'] < node['id'] and other_node['id'] > 0:
+                # Check if this could be a parent
+                if other_node['id'] < node['id']:
+                    is_root = False
+                    break
+        if is_root:
+            root_nodes.append(node)
     
-    dirtied_match = re.search(r'shared dirtied=([0-9]+)', buffers_str)
-    if dirtied_match:
-        buffers['shared_dirtied'] = int(dirtied_match.group(1))
+    # Build tree from root nodes
+    for root_node in root_nodes:
+        child_tree = build_oracle_node_tree(root_node, node_map)
+        execution_tree['children'].append(child_tree)
     
-    written_match = re.search(r'shared written=([0-9]+)', buffers_str)
-    if written_match:
-        buffers['shared_written'] = int(written_match.group(1))
-    
-    return buffers
+    return execution_tree
 
-def parse_sqlserver_xml(explain_plan):
-    """Parse SQL Server XML format (ShowPlanXML) with proper hierarchical structure."""
-    try:
-        print("[DEBUG] Received SQL Server XML (first 500 chars):\n", explain_plan[:500])
-        
-        # Use a more lenient XML parser that can handle truncated content
-        from xml.etree.ElementTree import XMLParser
-        from xml.parsers.expat import ParserCreate
-        
-        # Create a custom parser that's more forgiving
-        class LenientXMLParser:
-            def __init__(self):
-                self.root = None
-                self.current = None
-                self.stack = []
-                
-            def start(self, tag, attrs):
-                # Clean the tag name (remove namespace if present)
-                if '}' in tag:
-                    tag = tag.split('}')[1]
-                
-                element = {'tag': tag, 'attrs': dict(attrs), 'children': []}
-                
-                if self.root is None:
-                    self.root = element
-                else:
-                    self.current['children'].append(element)
-                
-                self.stack.append(self.current)
-                self.current = element
-                
-            def end(self, tag):
-                if self.stack:
-                    self.current = self.stack.pop()
-                    
-            def data(self, data):
-                pass  # Ignore text content for now
-        
-        # Try to parse with our lenient parser
-        try:
-            parser = ParserCreate()
-            lenient_parser = LenientXMLParser()
-            
-            parser.StartElementHandler = lenient_parser.start
-            parser.EndElementHandler = lenient_parser.end
-            parser.CharacterDataHandler = lenient_parser.data
-            
-            # Parse the XML content
-            parser.Parse(explain_plan, True)
-            
-            if lenient_parser.root is None:
-                raise Exception("No root element found")
-                
-            print("[DEBUG] Successfully parsed with lenient parser")
-            
-            # Now extract the execution plan from our parsed structure
-            def find_relop_nodes(element):
-                """Recursively find all RelOp nodes with their hierarchy"""
-                relops = []
-                if element['tag'] == 'RelOp':
-                    relops.append(element)
-                for child in element.get('children', []):
-                    relops.extend(find_relop_nodes(child))
-                return relops
-            
-            # Find all RelOp nodes
-            relop_nodes = find_relop_nodes(lenient_parser.root)
-            print(f"[DEBUG] Found {len(relop_nodes)} RelOp nodes")
-            
-            if not relop_nodes:
-                print("[DEBUG] No RelOp nodes found")
-                return None
-            
-            # Build proper hierarchical execution tree from RelOp nodes
-            def build_hierarchical_tree_from_relops(relops):
-                """Build proper hierarchical execution tree from RelOp nodes"""
-                if not relops:
-                    return None
-                
-                # Create a map of NodeId to RelOp for easier lookup
-                node_map = {}
-                for relop in relops:
-                    node_id = relop['attrs'].get('NodeId', '0')
-                    node_map[node_id] = relop
-                
-                # Find the root node (usually NodeId="0" or the one with highest NodeId)
-                root_node = None
-                if '0' in node_map:
-                    root_node = node_map['0']
-                else:
-                    # Find the node with the highest NodeId (usually the root)
-                    max_node_id = max(node_map.keys(), key=lambda x: int(x) if x.isdigit() else 0)
-                    root_node = node_map[max_node_id]
-                
-                def create_hierarchical_node(relop, parent_node_id=None):
-                    """Create a node with proper parent-child relationships"""
-                    node_data = {
-                        'operation': relop['attrs'].get('PhysicalOp', 'Unknown Operation'),
-                        'logical_op': relop['attrs'].get('LogicalOp', ''),
-                        'cost': float(relop['attrs'].get('EstimatedTotalSubtreeCost', 0)),
-                        'rows': int(float(relop['attrs'].get('EstimateRows', 0))),
-                        'time': 0,
-                        'node_id': relop['attrs'].get('NodeId', '0'),
-                        'children': []
-                    }
-                    
-                    # Find child RelOp nodes by looking for RelOp tags within this node's children
-                    for child in relop.get('children', []):
-                        if child['tag'] == 'RelOp':
-                            child_node = create_hierarchical_node(child, node_data['node_id'])
-                            node_data['children'].append(child_node)
-                    
-                    return node_data
-                
-                return create_hierarchical_node(root_node)
-            
-            execution_tree = build_hierarchical_tree_from_relops(relop_nodes)
-            if execution_tree:
-                # Add root wrapper
-                final_tree = {
-                    'operation': 'Query Execution Plan',
-                    'cost': 0,
-                    'rows': 0,
-                    'time': 0,
-                    'children': [execution_tree]
-                }
-                print("[DEBUG] Successfully built hierarchical execution tree")
-                return final_tree
-            else:
-                print("[DEBUG] Failed to build hierarchical execution tree")
-                return None
-                
-        except Exception as parse_error:
-            print(f"[DEBUG] Lenient parsing failed: {parse_error}")
-            
-            # Fallback: try to extract RelOp information using regex with hierarchy
-            import re
-            
-            # First, let's see what RelOp tags are actually in the XML
-            simple_relop_pattern = r'<RelOp[^>]*>'
-            relop_matches = re.findall(simple_relop_pattern, explain_plan)
-            print(f"[DEBUG] Found {len(relop_matches)} RelOp tags (raw):")
-            for i, match in enumerate(relop_matches[:5]):  # Show first 5
-                print(f"  {i+1}: {match}")
-            
-            # Extract RelOp nodes with their attributes and build hierarchy
-            relop_pattern = r'<RelOp[^>]*NodeId="([^"]*)"[^>]*PhysicalOp="([^"]*)"[^>]*>'
-            matches = re.findall(relop_pattern, explain_plan)
-            
-            if matches:
-                print(f"[DEBUG] Found {len(matches)} RelOp matches with NodeId and PhysicalOp")
-                
-                # Create a map of NodeId to operation data
-                node_data_map = {}
-                for node_id, physical_op in matches:
-                    # Find the corresponding RelOp tag and extract attributes
-                    relop_start = explain_plan.find(f'NodeId="{node_id}"')
-                    if relop_start != -1:
-                        # Look backwards to find the start of this RelOp tag
-                        tag_start = explain_plan.rfind('<RelOp', 0, relop_start)
-                        if tag_start != -1:
-                            # Extract the full RelOp tag
-                            tag_end = explain_plan.find('>', tag_start)
-                            if tag_end != -1:
-                                relop_tag = explain_plan[tag_start:tag_end + 1]
-                                
-                                # Extract cost and rows from this specific tag
-                                cost_match = re.search(r'EstimatedTotalSubtreeCost="([^"]*)"', relop_tag)
-                                rows_match = re.search(r'EstimateRows="([^"]*)"', relop_tag)
-                                logical_op_match = re.search(r'LogicalOp="([^"]*)"', relop_tag)
-                                
-                                cost = float(cost_match.group(1)) if cost_match else 0.0
-                                rows = int(float(rows_match.group(1))) if rows_match else 0
-                                logical_op = logical_op_match.group(1) if logical_op_match else ''
-                                
-                                node_data_map[node_id] = {
-                                    'operation': physical_op,
-                                    'logical_op': logical_op,
-                                    'cost': cost,
-                                    'rows': rows,
-                                    'time': 0,
-                                    'node_id': node_id,
-                                    'children': []
-                                }
-                                print(f"[DEBUG] Added node: {physical_op} (NodeId: {node_id}, cost: {cost}, rows: {rows})")
-                
-                # Build hierarchy based on NodeId (assuming lower numbers are parents)
-                if node_data_map:
-                    # Sort by NodeId to establish hierarchy
-                    sorted_nodes = sorted(node_data_map.items(), key=lambda x: int(x[0]) if x[0].isdigit() else 0)
-                    
-                    # Find root node (usually NodeId="0" or lowest number)
-                    root_node_id = sorted_nodes[0][0]
-                    root_node = node_data_map[root_node_id].copy()
-                    
-                    # Build parent-child relationships
-                    for node_id, node_data in sorted_nodes[1:]:
-                        # Find parent by looking for the closest lower NodeId
-                        parent_id = None
-                        for potential_parent_id in sorted(node_data_map.keys(), key=lambda x: int(x) if x.isdigit() else 0):
-                            if int(potential_parent_id) < int(node_id):
-                                parent_id = potential_parent_id
-                            else:
-                                break
-                        
-                        if parent_id and parent_id in node_data_map:
-                            node_data_map[parent_id]['children'].append(node_data)
-                    
-                    execution_tree = {
-                        'operation': 'Query Execution Plan',
-                        'cost': 0,
-                        'rows': 0,
-                        'time': 0,
-                        'children': [root_node]
-                    }
-                    print("[DEBUG] Successfully built hierarchical execution tree from regex")
-                    return execution_tree
-                else:
-                    print("[DEBUG] No valid nodes found in regex matches")
-                    return None
-            else:
-                print("[DEBUG] No RelOp matches found with regex")
-                
-                # Last resort: try to find any RelOp tags and create basic nodes
-                basic_relop_pattern = r'<RelOp[^>]*PhysicalOp="([^"]*)"[^>]*>'
-                basic_matches = re.findall(basic_relop_pattern, explain_plan)
-                
-                if basic_matches:
-                    print(f"[DEBUG] Found {len(basic_matches)} basic RelOp matches")
-                    execution_tree = {
-                        'operation': 'Query Execution Plan',
-                        'cost': 0,
-                        'rows': 0,
-                        'time': 0,
-                        'children': []
-                    }
-                    
-                    for physical_op in basic_matches:
-                        node = {
-                            'operation': physical_op,
-                            'cost': 0.0,
-                            'rows': 0,
-                            'time': 0,
-                            'children': []
-                        }
-                        execution_tree['children'].append(node)
-                    
-                    print("[DEBUG] Successfully built basic execution tree")
-                    return execution_tree
-                else:
-                    print("[DEBUG] No basic RelOp matches found either")
-                    return None
+def build_oracle_node_tree(node, node_map):
+    """Recursively build Oracle node tree"""
+    tree_node = {
+        'operation': node['operation'],
+        'cost': node['cost'],
+        'rows': node['rows'],
+        'time': 0,  # Oracle doesn't provide time in explain plan
+        'buffers': {},
+        'children': []
+    }
+    
+    # Find children (nodes with higher IDs that might be children)
+    for other_node in node_map.values():
+        if other_node['id'] > node['id']:
+            # Simple heuristic: if operation names are related, it might be a child
+            if is_oracle_child_operation(node['operation'], other_node['operation']):
+                child_tree = build_oracle_node_tree(other_node, node_map)
+                tree_node['children'].append(child_tree)
+    
+    return tree_node
 
-    except Exception as e:
-        print(f"[ERROR] XML parsing error: {e}")
-        traceback.print_exc()
-        return None
+def is_oracle_child_operation(parent_op, child_op):
+    """Determine if child_op is likely a child of parent_op in Oracle"""
+    # Simple heuristics for Oracle operation relationships
+    parent_lower = parent_op.lower()
+    child_lower = child_op.lower()
+    
+    # Common parent-child relationships in Oracle
+    relationships = [
+        ('hash join', 'table access'),
+        ('nested loops', 'table access'),
+        ('merge join', 'table access'),
+        ('sort', 'table access'),
+        ('index', 'table access'),
+        ('filter', 'table access'),
+        ('view', 'table access'),
+        ('union', 'table access'),
+        ('intersection', 'table access'),
+        ('minus', 'table access')
+    ]
+    
+    for parent, child in relationships:
+        if parent in parent_lower and child in child_lower:
+            return True
+    
+    return False
 
 def parse_sqlserver_explain_flow(explain_plan):
     """Parse SQL Server EXPLAIN PLAN output with enhanced format support"""
@@ -2884,6 +2612,1390 @@ def recommend_indexes_for_fts_tables(sql_query, indexes, alias_to_table, tables,
                 key = ('fts_review', fts_table)
                 recs.append({'text': rec_text, 'actionable': True, 'sub': [], 'key': key})
     return recs
+
+@app.errorhandler(CSRFError)
+def handle_csrf_error(e):
+    return render_template('csrf_error.html', reason=e.description), 400
+
+def detect_engine_from_explain(explain_plan):
+    if not explain_plan:
+        return None
+    plan = explain_plan.strip().lower()
+    # SQL Server: |--, Clustered Index Scan, Hash Match, Nested Loops, etc.
+    if '|--' in plan or 'clustered index scan' in plan or 'hash match' in plan or 'nested loops' in plan:
+        return 'sqlserver'
+    # Oracle: pipe format, TABLE ACCESS FULL, COST (%CPU)
+    if 'table access full' in plan or 'cost (%cpu)' in plan or '| id  | operation' in plan:
+        return 'oracle'
+    # MySQL: id, select_type, table, type, rows, Extra
+    if 'select_type' in plan and 'rows' in plan and 'extra' in plan:
+        return 'mysql'
+    if '| id |' in plan and '| table |' in plan:
+        return 'mysql'
+    # PostgreSQL: Seq Scan, Index Scan, cost=, width=
+    if 'seq scan' in plan or 'index scan' in plan or 'cost=' in plan or 'width=' in plan:
+        return 'postgresql'
+    # SQLite: SCAN TABLE, SEARCH TABLE
+    if 'scan table' in plan or 'search table' in plan:
+        return 'sqlite'
+    return None
+
+def detect_explain_format(explain_plan):
+    if not explain_plan:
+        return 'unknown'
+    plan_text = explain_plan.strip()
+    # SQL Server tree format (prioritize this check)
+    if '|--' in plan_text or 'Clustered Index Scan' in plan_text or 'Hash Match' in plan_text or 'Nested Loops' in plan_text:
+        return 'sqlserver'
+    # Check for JSON format
+    if (plan_text.startswith('[') and plan_text.endswith(']')) or \
+       (plan_text.startswith('{') and plan_text.endswith('}')):
+        try:
+            json.loads(plan_text)
+            return 'json'
+        except json.JSONDecodeError:
+            pass
+    # Check for XML format (SQL Server ShowPlanXML)
+    if plan_text.startswith('<') or '<RelOp' in plan_text or '<ShowPlanXML' in plan_text:
+        return 'xml'
+    # Check for SQL Server specific formats (table style)
+    if any(keyword in plan_text for keyword in [
+        'StmtText', 'PhysicalOp', 'LogicalOp', 'EstimateRows', 'EstimateIO', 'EstimateCPU', 'TotalSubtreeCost',
+        'HashAggregate', 'NodeId', 'PhysicalOp=', 'LogicalOp=', 'EstimateRows='
+    ]):
+        return 'sqlserver'
+    # Check for PostgreSQL text format (has indentation and -> markers)
+    if '->' in plan_text or 'Planning Time:' in plan_text or 'Execution Time:' in plan_text:
+        return 'postgresql_text'
+    # Check for Oracle format (pipe-delimited or table format)
+    if '|' in plan_text and ('Id' in plan_text or 'OPERATION' in plan_text):
+        return 'oracle'
+    # Default to text format
+    return 'text'
+
+def parse_explain_to_json(explain_plan, db_engine):
+    """Parse explain plan with format detection and routing"""
+    if not explain_plan:
+        return None
+    
+    # Auto-detect format
+    detected_format = detect_explain_format(explain_plan)
+    
+    # Route to appropriate parser based on engine and format
+    if db_engine == 'postgresql':
+        if detected_format == 'json':
+            return parse_postgresql_json(explain_plan)
+        elif detected_format == 'xml':
+            return parse_postgresql_xml(explain_plan)
+        elif detected_format == 'postgresql_text':
+            return parse_postgresql_text(explain_plan)
+        else:
+            return parse_postgresql_text(explain_plan)  # fallback
+    elif db_engine == 'oracle':
+        if detected_format == 'oracle':
+            return parse_oracle_explain_flow(explain_plan)
+        else:
+            return parse_oracle_explain_flow(explain_plan)  # fallback
+    elif db_engine == 'sqlserver':
+        if detected_format == 'sqlserver':
+            return parse_sqlserver_explain_flow(explain_plan)
+        elif detected_format == 'xml':
+            return parse_sqlserver_xml(explain_plan)
+        else:
+            return parse_sqlserver_explain_flow(explain_plan)  # fallback
+    
+    return None
+
+def parse_postgresql_json(explain_plan):
+    """Parse PostgreSQL JSON format - richest data source"""
+    try:
+        data = json.loads(explain_plan)
+        return extract_from_postgresql_json(data)
+    except json.JSONDecodeError as e:
+        print(f"JSON parsing error: {e}")
+        return None
+
+def extract_from_postgresql_json(data):
+    """Extract execution tree from PostgreSQL JSON format"""
+    if not data or not isinstance(data, list) or len(data) == 0:
+        return None
+    
+    # PostgreSQL JSON format: [{"Plan": {...}}]
+    plan_data = data[0].get('Plan', {})
+    
+    execution_tree = {
+        'operation': 'Query Execution Plan',
+        'cost': 0,
+        'rows': 0,
+        'time': 0,
+        'buffers': {},
+        'children': []
+    }
+    
+    def extract_node_data(node):
+        """Extract metrics from a JSON node"""
+        node_data = {
+            'operation': node.get('Node Type', 'Unknown Operation'),
+            'cost': node.get('Total Cost', 0),
+            'startup_cost': node.get('Startup Cost', 0),
+            'rows': node.get('Actual Rows', node.get('Plan Rows', 0)),
+            'time': node.get('Actual Total Time', 0),
+            'buffers': node.get('Buffers', {}),
+            'children': []
+        }
+        
+        # Add relation name if available
+        if node.get('Relation Name'):
+            node_data['operation'] += f" on {node.get('Relation Name')}"
+        
+        # Add index name if available
+        if node.get('Index Name'):
+            node_data['operation'] += f" using {node.get('Index Name')}"
+        
+        # Add scan direction if available
+        if node.get('Scan Direction'):
+            node_data['operation'] += f" ({node.get('Scan Direction')})"
+        
+        # Add filter conditions if available
+        if node.get('Filter'):
+            node_data['filter'] = node.get('Filter')
+        
+        # Add join conditions if available
+        if node.get('Hash Cond'):
+            node_data['join_condition'] = node.get('Hash Cond')
+        
+        # Process children
+        if 'Plans' in node:
+            for child in node['Plans']:
+                child_data = extract_node_data(child)
+                node_data['children'].append(child_data)
+        
+        return node_data
+    
+    # Extract the main plan
+    main_plan = extract_node_data(plan_data)
+    execution_tree.update(main_plan)
+    
+    return execution_tree
+
+def parse_postgresql_xml(explain_plan):
+    """Parse PostgreSQL XML format"""
+    # TODO: Implement XML parsing for PostgreSQL
+    # For now, fallback to text parsing
+    return parse_postgresql_text(explain_plan)
+
+def parse_postgresql_text(explain_plan):
+    """Parse PostgreSQL TEXT format - enhanced version"""
+    lines = explain_plan.strip().split('\n')
+    
+    # Skip header lines
+    skip_patterns = ['Planning Time:', 'Execution Time:', 'QUERY PLAN', '---']
+    filtered_lines = []
+    for line in lines:
+        if not any(pattern in line for pattern in skip_patterns):
+            filtered_lines.append(line)
+    
+    if not filtered_lines:
+        return None
+    
+    # Parse the execution flow based on indentation
+    execution_tree = {
+        'operation': 'Query Execution Plan',
+        'cost': 0,
+        'rows': 0,
+        'time': 0,
+        'buffers': {},
+        'children': []
+    }
+    
+    # Stack to track parent nodes based on indentation
+    node_stack = [execution_tree]
+    indent_stack = [-1]  # Track indentation levels
+    
+    for line in filtered_lines:
+        if not line.strip():
+            continue
+            
+        # Calculate indentation level (count leading spaces or ->)
+        original_line = line
+        indent_level = 0
+        while line.startswith('  ') or line.startswith('-> '):
+            if line.startswith('-> '):
+                indent_level += 1
+                line = line[3:]
+            else:
+                indent_level += 1
+                line = line[2:]
+        
+        # Parse operation and metrics
+        operation, metrics = parse_enhanced_postgresql_line(line)
+        
+        if not operation:
+            continue
+        
+        # Create node
+        node = {
+            'operation': operation,
+            'cost': metrics.get('cost', 0),
+            'startup_cost': metrics.get('startup_cost', 0),
+            'rows': metrics.get('rows', 0),
+            'time': metrics.get('time', 0),
+            'buffers': metrics.get('buffers', {}),
+            'filter': metrics.get('filter'),
+            'join_condition': metrics.get('join_condition'),
+            'children': []
+        }
+        
+        # Find the correct parent based on indentation
+        while len(indent_stack) > 1 and indent_level <= indent_stack[-1]:
+            node_stack.pop()
+            indent_stack.pop()
+        
+        # Add to current parent
+        node_stack[-1]['children'].append(node)
+        
+        # Push this node onto stack for potential children
+        node_stack.append(node)
+        indent_stack.append(indent_level)
+    
+    return execution_tree
+
+def parse_enhanced_postgresql_line(line):
+    """Parse a single PostgreSQL operation line with enhanced metrics"""
+    line = line.strip()
+    
+    # Extract metrics from parentheses
+    metrics = {}
+    operation = line
+    
+    # Look for metrics in parentheses
+    if ' (cost=' in line:
+        parts = line.split(' (cost=', 1)
+        operation = parts[0].strip()
+        metrics_str = 'cost=' + parts[1]
+        
+        # Parse startup and total cost
+        cost_match = re.search(r'cost=([\d.]+)\.\.([\d.]+)', metrics_str)
+        if cost_match:
+            metrics['startup_cost'] = float(cost_match.group(1))
+            metrics['cost'] = float(cost_match.group(2))
+        
+        # Parse rows
+        rows_match = re.search(r'rows=(\d+)', metrics_str)
+        if rows_match:
+            metrics['rows'] = int(rows_match.group(1))
+        
+        # Parse actual time if available
+        time_match = re.search(r'actual time=([\d.]+)\.\.([\d.]+)', metrics_str)
+        if time_match:
+            metrics['time'] = float(time_match.group(2))  # Use end time
+        
+        # Parse width
+        width_match = re.search(r'width=(\d+)', metrics_str)
+        if width_match:
+            metrics['width'] = int(width_match.group(1))
+        
+        # Parse buffer information
+        buffers_match = re.search(r'Buffers: (.*?)(?:\s|$)', metrics_str)
+        if buffers_match:
+            buffers_str = buffers_match.group(1)
+            metrics['buffers'] = parse_buffer_info(buffers_str)
+    
+    # Extract filter conditions
+    filter_match = re.search(r'Filter: (.+?)(?:\s|$)', line)
+    if filter_match:
+        metrics['filter'] = filter_match.group(1)
+    
+    # Extract join conditions
+    join_match = re.search(r'Hash Cond: (.+?)(?:\s|$)', line)
+    if join_match:
+        metrics['join_condition'] = join_match.group(1)
+    
+    # Clean up operation name
+    operation = operation.replace('_', ' ').title()
+    
+    return operation, metrics
+
+def parse_buffer_info(buffers_str):
+    """Parse PostgreSQL buffer information"""
+    buffers = {}
+    
+    # Parse shared hit/read/written
+    shared_hit = re.search(r'shared hit=(\d+)', buffers_str)
+    if shared_hit:
+        buffers['shared_hit'] = int(shared_hit.group(1))
+    
+    shared_read = re.search(r'shared read=(\d+)', buffers_str)
+    if shared_read:
+        buffers['shared_read'] = int(shared_read.group(1))
+    
+    shared_written = re.search(r'shared written=(\d+)', buffers_str)
+    if shared_written:
+        buffers['shared_written'] = int(shared_written.group(1))
+    
+    return buffers
+
+def parse_sqlserver_xml(explain_plan):
+    """Parse SQL Server XML format (ShowPlanXML)"""
+    try:
+        import xml.etree.ElementTree as ET
+        
+        # Parse XML
+        root = ET.fromstring(explain_plan)
+        
+        # Find all RelOp nodes
+        relops = root.findall('.//{http://schemas.microsoft.com/sqlserver/2004/07/showplan}RelOp')
+        
+        if not relops:
+            return None
+        
+        execution_tree = {
+            'operation': 'SQL Server Query Execution Plan',
+            'cost': 0,
+            'rows': 0,
+            'time': 0,
+            'buffers': {},
+            'children': []
+        }
+        
+        # Build hierarchy based on NodeId
+        node_map = {}
+        
+        for relop in relops:
+            node_id = relop.get('NodeId', '0')
+            physical_op = relop.get('PhysicalOp', 'Unknown')
+            logical_op = relop.get('LogicalOp', 'Unknown')
+            estimate_rows = relop.get('EstimateRows', '0')
+            estimated_cost = relop.get('EstimatedTotalSubtreeCost', '0')
+            
+            # Parse metrics
+            try:
+                rows = float(estimate_rows) if estimate_rows else 0
+                cost = float(estimated_cost) if estimated_cost else 0
+            except (ValueError, TypeError):
+                rows, cost = 0, 0
+            
+            # Create node
+            node = {
+                'operation': physical_op,
+                'cost': cost,
+                'rows': rows,
+                'time': 0,  # XML format doesn't provide actual time
+                'buffers': {},
+                'children': []
+            }
+            
+            node_map[node_id] = node
+        
+        # Build hierarchy - assume nodes are in execution order
+        # For simplicity, add all nodes as children of root
+        for node in node_map.values():
+            execution_tree['children'].append(node)
+        
+        return execution_tree
+        
+    except Exception as e:
+        print(f"SQL Server XML parsing error: {e}")
+        return None
+
+def parse_sqlserver_generic_format(lines):
+    """Parse SQL Server generic format"""
+    execution_tree = {
+        'operation': 'SQL Server Query Execution Plan',
+        'cost': 0,
+        'rows': 0,
+        'time': 0,
+        'buffers': {},
+        'children': []
+    }
+    
+    # For other SQL Server formats, try to extract operations
+    for line in lines:
+        operation, metrics = parse_enhanced_sqlserver_line(line)
+        if operation:
+            node = {
+                'operation': operation,
+                'cost': metrics.get('cost', 0),
+                'rows': metrics.get('rows', 0),
+                'time': metrics.get('time', 0),
+                'buffers': metrics.get('buffers', {}),
+                'children': []
+            }
+            execution_tree['children'].append(node)
+    
+    return execution_tree
+
+def parse_enhanced_sqlserver_line(line):
+    """Parse a single SQL Server operation line with enhanced metrics"""
+    line = line.strip()
+    
+    # Extract metrics from parentheses
+    metrics = {}
+    operation = line
+    
+    # Look for cost information
+    cost_match = re.search(r'cost=(\d+(?:\.\d+)?)', line, re.IGNORECASE)
+    if cost_match:
+        metrics['cost'] = float(cost_match.group(1))
+    
+    # Look for rows information
+    rows_match = re.search(r'rows=(\d+)', line, re.IGNORECASE)
+    if rows_match:
+        metrics['rows'] = int(rows_match.group(1))
+    
+    # Look for time information
+    time_match = re.search(r'time=(\d+(?:\.\d+)?)', line, re.IGNORECASE)
+    if time_match:
+        metrics['time'] = float(time_match.group(1))
+    
+    # Look for I/O information
+    io_match = re.search(r'io=(\d+)', line, re.IGNORECASE)
+    if io_match:
+        metrics['buffers'] = {'shared_read': int(io_match.group(1))}
+    
+    # Clean up operation name
+    if ' (cost=' in line:
+        operation = line.split(' (cost=')[0].strip()
+    
+    # Clean up operation name
+    operation = operation.replace('_', ' ').title()
+    
+    return operation, metrics
+
+def parse_operation_line(line):
+    """Parse a single operation line to extract operation name and metrics"""
+    line = line.strip()
+    
+    # Extract metrics from parentheses
+    metrics = {}
+    operation = line
+    
+    # Look for metrics in parentheses
+    if ' (cost=' in line:
+        parts = line.split(' (cost=', 1)
+        operation = parts[0].strip()
+        metrics_str = 'cost=' + parts[1]
+        
+        # Parse cost
+        cost_match = re.search(r'cost=([\d.]+)\.\.([\d.]+)', metrics_str)
+        if cost_match:
+            metrics['cost'] = float(cost_match.group(2))  # Use end cost
+        
+        # Parse rows
+        rows_match = re.search(r'rows=(\d+)', metrics_str)
+        if rows_match:
+            metrics['rows'] = int(rows_match.group(1))
+        
+        # Parse actual time if available
+        time_match = re.search(r'actual time=([\d.]+)\.\.([\d.]+)', metrics_str)
+        if time_match:
+            metrics['time'] = float(time_match.group(2))  # Use end time
+        
+        # Parse width
+        width_match = re.search(r'width=(\d+)', metrics_str)
+        if width_match:
+            metrics['width'] = int(width_match.group(1))
+    
+    # Clean up operation name
+    operation = operation.replace('_', ' ').title()
+    
+    return operation, metrics
+
+def parse_explain_plan_to_mermaid(explain_plan, db_engine='postgresql'):
+    """
+    Parse EXPLAIN plan output and convert to Mermaid.js flowchart.
+    Supports CSV data and text input for multiple database engines.
+    """
+    if not explain_plan or not explain_plan.strip():
+        return None
+    
+    try:
+        # For MySQL with pipe separators, use text parser
+        if db_engine == 'mysql' and '|' in explain_plan and 'select_type' in explain_plan:
+            return parse_text_explain_plan(explain_plan, db_engine)
+        # Try to parse as CSV first
+        elif '\n' in explain_plan and any(',' in line for line in explain_plan.split('\n')[:3]):
+            return parse_csv_explain_plan(explain_plan, db_engine)
+        else:
+            return parse_text_explain_plan(explain_plan, db_engine)
+    except Exception as e:
+        return None
+
+def parse_csv_explain_plan(csv_data, db_engine):
+    """Parse CSV-formatted EXPLAIN plan data"""
+    import csv
+    from io import StringIO
+    
+    nodes = []
+    edges = []
+    node_id_map = {}
+    parent_stack = []
+    
+    # Parse CSV
+    csv_reader = csv.DictReader(StringIO(csv_data))
+    
+    for row in csv_reader:
+        # Extract node information based on database engine
+        if db_engine == 'postgresql':
+            node_id = row.get('Node Type', row.get('node_type', 'N'))
+            operation = row.get('Operation', row.get('operation', ''))
+            table_name = row.get('Table Name', row.get('table_name', ''))
+            cost = row.get('Cost', row.get('cost', ''))
+            rows = row.get('Rows', row.get('rows', ''))
+            width = row.get('Width', row.get('width', ''))
+            
+            # Create node label
+            label_parts = [operation]
+            if table_name:
+                label_parts.append(f"on {table_name}")
+            if cost:
+                label_parts.append(f"(cost={cost})")
+            if rows:
+                label_parts.append(f"rows={rows}")
+            if width:
+                label_parts.append(f"width={width}")
+            
+            label = " ".join(label_parts)
+            
+        elif db_engine == 'mysql':
+            node_id = row.get('id', row.get('ID', 'N'))
+            select_type = row.get('select_type', row.get('SELECT_TYPE', ''))
+            table = row.get('table', row.get('TABLE', ''))
+            type_val = row.get('type', row.get('TYPE', ''))
+            key = row.get('key', row.get('KEY', ''))
+            rows = row.get('rows', row.get('ROWS', ''))
+            extra = row.get('extra', row.get('Extra', ''))
+            
+            # Create meaningful label
+            label_parts = []
+            if select_type and select_type != 'NULL':
+                label_parts.append(select_type)
+            
+            if table and table != 'NULL':
+                label_parts.append(f"on {table}")
+            
+            if type_val and type_val != 'NULL':
+                label_parts.append(f"({type_val})")
+            
+            if key and key != 'NULL':
+                label_parts.append(f"key={key}")
+            
+            if rows and rows != 'NULL':
+                label_parts.append(f"rows={rows}")
+            
+            if extra and extra != 'NULL':
+                # Truncate extra info if too long
+                if len(extra) > 30:
+                    extra = extra[:27] + "..."
+                label_parts.append(extra)
+            
+            label = " ".join(label_parts)
+            
+            # Skip empty labels
+            if not label or label.strip() == "":
+                continue
+                
+            operation = select_type  # Use select_type as operation for styling
+            
+        elif db_engine == 'oracle':
+            node_id = row.get('id', row.get('ID', 'N'))
+            operation = row.get('operation', row.get('OPERATION', ''))
+            name = row.get('name', row.get('NAME', ''))
+            rows = row.get('rows', row.get('ROWS', ''))
+            cost = row.get('cost', row.get('COST', ''))
+            
+            label_parts = [operation]
+            if name:
+                label_parts.append(f"on {name}")
+            if cost:
+                label_parts.append(f"(cost={cost})")
+            if rows:
+                label_parts.append(f"rows={rows}")
+            
+            label = " ".join(label_parts)
+            
+        elif db_engine == 'sqlserver':
+            node_id = row.get('node_id', row.get('Node ID', 'N'))
+            physical_op = row.get('physical_op', row.get('Physical Op', ''))
+            logical_op = row.get('logical_op', row.get('Logical Op', ''))
+            table_name = row.get('table_name', row.get('Table Name', ''))
+            estimated_rows = row.get('estimated_rows', row.get('Estimated Rows', ''))
+            
+            label_parts = [physical_op]
+            if logical_op and logical_op != physical_op:
+                label_parts.append(f"({logical_op})")
+            if table_name:
+                label_parts.append(f"on {table_name}")
+            if estimated_rows:
+                label_parts.append(f"rows={estimated_rows}")
+            
+            label = " ".join(label_parts)
+            
+        else:  # Generic
+            node_id = row.get('id', row.get('ID', 'N'))
+            operation = row.get('operation', row.get('Operation', ''))
+            table = row.get('table', row.get('Table', ''))
+            
+            label_parts = [operation]
+            if table:
+                label_parts.append(f"on {table}")
+            
+            label = " ".join(label_parts)
+        
+        # Create unique node ID
+        unique_id = f"N{node_id}"
+        node_id_map[node_id] = unique_id
+        
+        # Add node with simple styling (no CSS classes for now)
+        nodes.append(f'{unique_id}["{label}"]')
+        
+        # Handle parent-child relationships
+        parent_id = row.get('parent_id', row.get('Parent ID', ''))
+        if parent_id and parent_id in node_id_map:
+            edges.append(f'{node_id_map[parent_id]} --> {unique_id}')
+    
+    if nodes:
+        return 'graph TD\n' + '\n'.join(nodes + edges)
+    
+    return None
+
+def parse_text_explain_plan(text_data, db_engine):
+    """Parse text-formatted EXPLAIN plan data with robust hierarchical parsing"""
+    nodes = []
+    edges = []
+    node_id_map = {}
+    parent_stack = []
+    lines = text_data.strip().split('\n')
+    skip_patterns = ['---', '===', 'QUERY PLAN', 'Planning Time:', 'Execution Time:']
+    for i, line in enumerate(lines):
+        line = line.strip()
+        if not line or any(pattern in line for pattern in skip_patterns):
+            continue
+        original_line = lines[i]
+        indent = len(original_line) - len(original_line.lstrip())
+        if db_engine == 'oracle':
+            # Try pipe-delimited table format first
+            if '|' in line and not line.startswith('|--'):
+                if 'Id' in line and 'Operation' in line:
+                    continue
+                if line.startswith('|----'):
+                    continue
+                parts = [part.strip() for part in line.split('|')]
+                if len(parts) >= 3:
+                    id_val = parts[1]
+                    operation = parts[2]
+                    name = parts[3] if len(parts) > 3 else ''
+                    rows = parts[4] if len(parts) > 4 else ''
+                    cost = parts[5] if len(parts) > 5 else ''
+                    label_parts = []
+                    if operation and operation != 'NULL':
+                        label_parts.append(operation)
+                    if name and name != 'NULL':
+                        label_parts.append(f"on {name}")
+                    if cost and cost != 'NULL':
+                        label_parts.append(f"cost={cost}")
+                    if rows and rows != 'NULL':
+                        label_parts.append(f"rows={rows}")
+                    label = " ".join(label_parts)
+                    if not label or label.strip() == "":
+                        continue
+                    if len(label) > 80:
+                        label = label[:77] + "..."
+                    node_id = f"N{i}"
+                    nodes.append(f'{node_id}["{label}"]')
+                    if len(nodes) > 1:
+                        prev_node = f"N{i-1}"
+                        edges.append(f'{prev_node} --> {node_id}')
+                    continue
+            # Indented tree-like format (fallback)
+            # e.g. SELECT STATEMENT\n  HASH JOIN\n    TABLE ACCESS FULL USERS\n    TABLE ACCESS FULL ORDERS
+            label = line.strip()
+            if not label:
+                continue
+            if len(label) > 80:
+                label = label[:77] + "..."
+            node_id = f"N{i}"
+            nodes.append(f'{node_id}["{label}"]')
+            # Infer parent-child from indentation
+            while parent_stack and indent <= parent_stack[-1][1]:
+                parent_stack.pop()
+            if parent_stack:
+                parent_id = parent_stack[-1][0]
+                edges.append(f'{parent_id} --> {node_id}')
+            parent_stack.append((node_id, indent))
+        elif db_engine == 'postgresql':
+            # ... existing code ...
+            pass  # Unchanged
+        elif db_engine == 'mysql':
+            # ... existing code ...
+            pass  # Unchanged
+        elif db_engine == 'sqlserver':
+            # ... existing code ...
+            pass  # Unchanged
+        else:
+            # Generic fallback
+            if line.strip():
+                label = line.strip()
+                if len(label) > 80:
+                    label = label[:77] + "..."
+                node_id = f"N{i}"
+                nodes.append(f'{node_id}["{label}"]')
+                if len(nodes) > 1:
+                    prev_node = f"N{i-1}"
+                    edges.append(f'{prev_node} --> {node_id}')
+    if nodes:
+        mermaid_code = 'graph TD\n' + '\n'.join(nodes)
+        if edges:
+            mermaid_code += '\n' + '\n'.join(edges)
+        return mermaid_code
+    return None
+
+def get_node_style(operation, db_engine):
+    """Get Mermaid.js styling for different operation types"""
+    operation_lower = operation.lower()
+    
+    # Define color schemes for different operation types
+    if any(scan in operation_lower for scan in ['seq scan', 'table scan', 'full scan', 'table access full']):
+        return ':::seq-scan'
+    elif any(scan in operation_lower for scan in ['index scan', 'index range scan', 'index seek']):
+        return ':::index-scan'
+    elif any(join in operation_lower for join in ['hash join', 'nested loop', 'merge join', 'join']):
+        return ':::join'
+    elif any(agg in operation_lower for agg in ['aggregate', 'group', 'sort']):
+        return ':::aggregate'
+    elif any(filter in operation_lower for filter in ['filter', 'where']):
+        return ':::filter'
+    elif any(result in operation_lower for result in ['result', 'output']):
+        return ':::result'
+    else:
+        return ':::default'
+
+def get_alias_to_table_mapping(sql_query):
+    import re
+    alias_to_table = {}
+    from_join_pattern = re.compile(r'(FROM|JOIN)\s+([\w\"]+)(?:\s+AS)?\s+(\w+)', re.IGNORECASE)
+    for match in from_join_pattern.finditer(sql_query):
+        real_table = match.group(2).replace('"', '')
+        alias = match.group(3)
+        alias_to_table[alias] = real_table
+    return alias_to_table
+
+def get_real_column_index_recommendations(sql_query, indexes, alias_to_table, tables):
+    import re
+    where_cols = set()
+    orderby_cols = set()
+    join_cols = set()
+    for match in re.finditer(r'WHERE\s+([\w\.]+)', sql_query, re.IGNORECASE):
+        col = match.group(1)
+        where_cols.add(col)
+    for match in re.finditer(r'JOIN\s+\w+\s+ON\s+([\w\.]+)', sql_query, re.IGNORECASE):
+        col = match.group(1)
+        join_cols.add(col)
+    for match in re.finditer(r'ORDER BY\s+([\w\.]+)', sql_query, re.IGNORECASE):
+        col = match.group(1)
+        orderby_cols.add(col)
+    user_indexes = parse_user_indexes(indexes)
+    index_recs = {}
+    for col in where_cols | join_cols | orderby_cols:
+        # Only recommend for real columns in real tables (not aggregates/aliases)
+        if col and '.' in col:
+            alias, column = col.split('.', 1)
+            real_table = alias_to_table.get(alias, alias)
+            # Check if real_table is in tables
+            if real_table not in [t['name'] for t in tables]:
+                continue
+            # Skip aggregates/aliases
+            if re.match(r'\d+$', column) or column.lower() in ['count', 'sum', 'avg', 'min', 'max', 'order_count']:
+                continue
+            # SKIP if already indexed
+            if column.lower() in user_indexes.get(real_table.lower(), set()):
+                continue
+            rec_text = f"Consider creating an index on column '{column}' in table '{real_table}' for better performance."
+            ddl_text = f"CREATE INDEX idx_{real_table}_{column}_auto ON {real_table}({column});"
+            key = ('index', real_table, column)
+            if key not in index_recs:
+                index_recs[key] = {'text': rec_text, 'actionable': True, 'sub': [{'text': ddl_text, 'actionable': False}], 'key': key}
+            else:
+                if not any(sub['text'] == ddl_text for sub in index_recs[key]['sub']):
+                    index_recs[key]['sub'].append({'text': ddl_text, 'actionable': False})
+    return list(index_recs.values())
+
+def extract_fts_tables_from_explain(explain_plan, db_engine):
+    """
+    Extract all tables accessed via full table scan from the EXPLAIN plan using EXPLAIN_KEYWORDS.
+    Returns a set of table names.
+    Improved for Oracle: robustly extract table names from lines like 'TABLE ACCESS FULL USERS' and pipe-formatted plans.
+    """
+    from explain_keywords import EXPLAIN_KEYWORDS
+    fts_tables = set()
+    if not explain_plan:
+        return fts_tables
+    # Normalize line endings and strip whitespace
+    plan_lines = [l.strip() for l in explain_plan.strip().split('\n') if l.strip()]
+    keywords = EXPLAIN_KEYWORDS.get(db_engine, {})
+    scan_keywords = set(keywords.get('sequential', []) + keywords.get('table', []) + keywords.get('full_scan', []) + keywords.get('scan', []))
+    for line in plan_lines:
+        # Oracle pipe format: | 3 | TABLE ACCESS FULL | DEPARTMENTS | 27 | 3 (0) |
+        if db_engine == 'oracle' and '|' in line:
+            parts = [p.strip() for p in line.strip('|').split('|')]
+            if len(parts) >= 3:
+                op = parts[1].upper()
+                table = parts[2]
+                for kw in scan_keywords:
+                    if kw.upper() in op:
+                        if table and table.upper() not in {'', 'N/A', 'VW_SQ_1'}:
+                            fts_tables.add(table)
+        else:
+            for kw in scan_keywords:
+                if kw.lower() in line.lower():
+                    m = re.search(rf"{re.escape(kw)}[\s]+([\w\"\[\]]+)", line, re.IGNORECASE)
+                    if m:
+                        table = m.group(1).replace('"', '').replace('[', '').replace(']', '')
+                        fts_tables.add(table)
+                    else:
+                        parts = line.strip().split()
+                        if len(parts) > 0:
+                            table = parts[-1].replace('"', '').replace('[', '').replace(']', '')
+                            if table.upper() not in {'FULL', 'ACCESS', 'TABLE', 'SCAN', 'INDEX', 'HASH', 'JOIN', 'STATEMENT'}:
+                                fts_tables.add(table)
+    return fts_tables
+
+# In each analyze_* function, after parsing the EXPLAIN plan:
+# 1. Call extract_fts_tables_from_explain(explain_plan, db_engine)
+# 2. For each FTS table, if not already indexed, recommend an index on the best predicate column (from WHERE/JOIN), or recommend review if no predicate found.
+# 3. Ensure all FTS tables are covered in recommendations.
+
+def extract_explain_plan_metrics(explain_plan, db_engine):
+    """
+    Parse EXPLAIN plan for actual rows scanned, cost, memory/bytes, and estimated time for all engines.
+    Returns a dict: {rows_scanned, cost, memory, time}
+    """
+    metrics = {'rows_scanned': None, 'cost': None, 'memory': None, 'time': None}
+    if not explain_plan:
+        return metrics
+    plan_lines = explain_plan.strip().split('\n')
+    # Try CSV first if it looks like CSV
+    if any(',' in line for line in plan_lines[:3]):
+        try:
+            csv_reader = csv.DictReader(StringIO(explain_plan))
+            rows_list, cost_list, mem_list, time_list = [], [], [], []
+            for row in csv_reader:
+                for k, v in row.items():
+                    if v is None or v == '' or v == 'NULL':
+                        continue
+                    kl = k.lower()
+                    if 'row' in kl and v.isdigit():
+                        rows_list.append(int(v))
+                    if 'cost' in kl and v.replace('.', '', 1).isdigit():
+                        cost_list.append(float(v))
+                    if 'byte' in kl and v.isdigit():
+                        mem_list.append(int(v))
+                    if 'mem' in kl and v.replace('.', '', 1).isdigit():
+                        mem_list.append(float(v))
+                    if 'time' in kl and v.replace('.', '', 1).isdigit():
+                        time_list.append(float(v))
+            if rows_list:
+                metrics['rows_scanned'] = max(rows_list)
+            if cost_list:
+                metrics['cost'] = max(cost_list)
+            if mem_list:
+                metrics['memory'] = max(mem_list)
+            if time_list:
+                metrics['time'] = max(time_list)
+            return metrics
+        except Exception:
+            pass
+    # Text parsing by engine
+    if db_engine == 'postgresql':
+        # e.g. Seq Scan on users  (cost=0.00..431.00 rows=21000 width=4)
+        rows_list, cost_list, mem_list, time_list = [], [], [], []
+        for line in plan_lines:
+            m = re.search(r'rows=(\d+)', line)
+            if m:
+                rows_list.append(int(m.group(1)))
+            m = re.search(r'cost=([\d\.]+)\.\.([\d\.]+)', line)
+            if m:
+                cost_list.append(float(m.group(2)))
+            m = re.search(r'width=(\d+)', line)
+            if m:
+                mem_list.append(int(m.group(1)))
+        if rows_list:
+            metrics['rows_scanned'] = max(rows_list)
+        if cost_list:
+            metrics['cost'] = max(cost_list)
+        if mem_list:
+            metrics['memory'] = max(mem_list)
+    elif db_engine == 'mysql':
+        # e.g. | id | select_type | table | type | rows | Extra |
+        for line in plan_lines:
+            m = re.search(r'rows=?(\d+)', line)
+            if m:
+                metrics['rows_scanned'] = max(metrics['rows_scanned'] or 0, int(m.group(1))) if metrics['rows_scanned'] else int(m.group(1))
+            m = re.search(r'Using\s+filesort', line, re.IGNORECASE)
+            if m:
+                metrics['cost'] = (metrics['cost'] or 0) + 10
+        # MySQL EXPLAIN rarely gives memory/time directly
+    elif db_engine == 'oracle':
+        # Pipe/table or indented
+        for line in plan_lines:
+            m = re.search(r'rows=?(\d+)', line)
+            if m:
+                metrics['rows_scanned'] = max(metrics['rows_scanned'] or 0, int(m.group(1))) if metrics['rows_scanned'] else int(m.group(1))
+            m = re.search(r'cost=?(\d+)', line)
+            if m:
+                metrics['cost'] = max(metrics['cost'] or 0, int(m.group(1))) if metrics['cost'] else int(m.group(1))
+            m = re.search(r'bytes=?(\d+)', line)
+            if m:
+                metrics['memory'] = max(metrics['memory'] or 0, int(m.group(1))) if metrics['memory'] else int(m.group(1))
+    elif db_engine == 'sqlserver':
+        for line in plan_lines:
+            m = re.search(r'Estimated Rows=?(\d+)', line, re.IGNORECASE)
+            if m:
+                metrics['rows_scanned'] = max(metrics['rows_scanned'] or 0, int(m.group(1))) if metrics['rows_scanned'] else int(m.group(1))
+            m = re.search(r'Estimated Total Subtree Cost=([\d\.]+)', line, re.IGNORECASE)
+            if m:
+                metrics['cost'] = max(metrics['cost'] or 0, float(m.group(1))) if metrics['cost'] else float(m.group(1))
+            m = re.search(r'Memory Grant=([\d\.]+)', line, re.IGNORECASE)
+            if m:
+                metrics['memory'] = max(metrics['memory'] or 0, float(m.group(1))) if metrics['memory'] else float(m.group(1))
+    elif db_engine == 'sqlite':
+        for line in plan_lines:
+            m = re.search(r'rows=?(\d+)', line)
+            if m:
+                metrics['rows_scanned'] = max(metrics['rows_scanned'] or 0, int(m.group(1))) if metrics['rows_scanned'] else int(m.group(1))
+    return metrics
+
+def parse_user_indexes(indexes):
+    """
+    Parse user-provided index definitions and return {table: set(columns)} for fast lookup.
+    Supports multi-column indexes and different syntaxes for all engines.
+    """
+    table_to_indexed_cols = {}
+    for idx in indexes:
+        defn = idx.get('definition') or idx.get('ddl') or ''
+        # Try to extract table and columns from CREATE INDEX ... ON table(col1, col2, ...)
+        m = re.search(r'CREATE\s+INDEX\s+\w+\s+ON\s+([\w\"\[\]]+)\s*\(([^)]+)\)', defn, re.IGNORECASE)
+        if m:
+            table = m.group(1).replace('"', '').replace('[', '').replace(']', '').lower()
+            cols = [c.strip().lower() for c in m.group(2).split(',')]
+            table_to_indexed_cols.setdefault(table, set()).update(cols)
+            continue
+        # MySQL/SQL Server: CREATE INDEX ... ON table (col1, col2)
+        m = re.search(r'ON\s+([\w\"\[\]]+)\s*\(([^)]+)\)', defn, re.IGNORECASE)
+        if m:
+            table = m.group(1).replace('"', '').replace('[', '').replace(']', '').lower()
+            cols = [c.strip().lower() for c in m.group(2).split(',')]
+            table_to_indexed_cols.setdefault(table, set()).update(cols)
+            continue
+        # Oracle: CREATE INDEX ... ON "TABLE" ("COL1", ...)
+        m = re.search(r'ON\s+"?([\w]+)"?\s*\(([^)]+)\)', defn, re.IGNORECASE)
+        if m:
+            table = m.group(1).lower()
+            cols = [c.replace('"', '').strip().lower() for c in m.group(2).split(',')]
+            table_to_indexed_cols.setdefault(table, set()).update(cols)
+    return table_to_indexed_cols
+
+# Update recommend_indexes_for_fts_tables to use parse_user_indexes
+
+def recommend_indexes_for_fts_tables(sql_query, indexes, alias_to_table, tables, explain_plan, db_engine):
+    """
+    For every FTS table detected in the EXPLAIN plan, recommend an index on the best predicate column (from WHERE/JOIN/ORDER BY),
+    or a review if no predicate is found. If an index exists but FTS still occurs, recommend investigation steps.
+    Never recommend both a new index and investigation for the same table.
+    """
+    fts_tables = extract_fts_tables_from_explain(explain_plan, db_engine)
+    where_cols = set()
+    orderby_cols = set()
+    join_cols = set()
+    for match in re.finditer(r'WHERE\s+([\w\.]+)', sql_query, re.IGNORECASE):
+        col = match.group(1)
+        where_cols.add(col)
+    for match in re.finditer(r'JOIN\s+\w+\s+ON\s+([\w\.]+)', sql_query, re.IGNORECASE):
+        col = match.group(1)
+        join_cols.add(col)
+    for match in re.finditer(r'ORDER BY\s+([\w\.]+)', sql_query, re.IGNORECASE):
+        col = match.group(1)
+        orderby_cols.add(col)
+    user_indexes = parse_user_indexes(indexes)
+    recs = []
+    for fts_table in fts_tables:
+        fts_table_lc = fts_table.lower()
+        investigation_given = False
+        # Check if any relevant predicate column already has an index
+        for col in where_cols | join_cols | orderby_cols:
+            if col and '.' in col:
+                alias, column = col.split('.', 1)
+                real_table = alias_to_table.get(alias, alias).lower()
+                column_lc = column.lower()
+                if real_table == fts_table_lc:
+                    # Skip aggregates/aliases
+                    if re.match(r'\d+$', column_lc) or column_lc in ['count', 'sum', 'avg', 'min', 'max', 'order_count']:
+                        continue
+                    if column_lc in user_indexes.get(real_table, set()):
+                        # Only investigation advice, never a new index for this table
+                        rec_text = (f"Table '{fts_table}' is accessed via Full Table Scan even though an index exists on '{column}'. "
+                                    f"Consider running ANALYZE/UPDATE STATISTICS, checking for data skew or NULLs, or using a query hint to encourage index usage.")
+                        key = ('fts_index_exists', fts_table, column)
+                        recs.append({'text': rec_text, 'actionable': True, 'sub': [], 'key': key})
+                        investigation_given = True
+                        break
+        if not investigation_given:
+            # Only recommend a new index if no relevant predicate column has an index
+            best_col = None
+            for col in where_cols | join_cols | orderby_cols:
+                if col and '.' in col:
+                    alias, column = col.split('.', 1)
+                    real_table = alias_to_table.get(alias, alias).lower()
+                    column_lc = column.lower()
+                    if real_table == fts_table_lc:
+                        # Skip aggregates/aliases
+                        if re.match(r'\d+$', column_lc) or column_lc in ['count', 'sum', 'avg', 'min', 'max', 'order_count']:
+                            continue
+                        best_col = column
+                        break
+            if best_col:
+                rec_text = f"Consider creating an index on column '{best_col}' in table '{fts_table}' for better performance (Full Table Scan detected)."
+                ddl_text = f"CREATE INDEX idx_{fts_table}_{best_col}_auto ON {fts_table}({best_col});"
+                key = ('fts_index', fts_table, best_col)
+                recs.append({'text': rec_text, 'actionable': True, 'sub': [{'text': ddl_text, 'actionable': False}], 'key': key})
+            else:
+                rec_text = f"Table '{fts_table}' is accessed via Full Table Scan. Review for possible indexing or query rewrite."
+                key = ('fts_review', fts_table)
+                recs.append({'text': rec_text, 'actionable': True, 'sub': [], 'key': key})
+    return recs
+
+@app.errorhandler(CSRFError)
+def handle_csrf_error(e):
+    return render_template('csrf_error.html', reason=e.description), 400
+
+def detect_engine_from_explain(explain_plan):
+    """
+    Heuristically detect the likely DB engine from the EXPLAIN plan string.
+    Returns one of: 'oracle', 'mysql', 'postgresql', 'sqlserver', 'sqlite', or None.
+    """
+    if not explain_plan:
+        return None
+    plan = explain_plan.strip().lower()
+    # SQL Server: |--, Clustered Index Scan, Hash Match, Nested Loops, etc.
+    if '|--' in plan or 'clustered index scan' in plan or 'hash match' in plan or 'nested loops' in plan:
+        return 'sqlserver'
+    # Oracle: pipe format, TABLE ACCESS FULL, COST (%CPU)
+    if 'table access full' in plan or 'cost (%cpu)' in plan or '| id  | operation' in plan:
+        return 'oracle'
+    # MySQL: id, select_type, table, type, rows, Extra
+    if 'select_type' in plan and 'rows' in plan and 'extra' in plan:
+        return 'mysql'
+    if '| id |' in plan and '| table |' in plan:
+        return 'mysql'
+    # PostgreSQL: Seq Scan, Index Scan, cost=, width=
+    if 'seq scan' in plan or 'index scan' in plan or 'cost=' in plan or 'width=' in plan:
+        return 'postgresql'
+    # SQLite: SCAN TABLE, SEARCH TABLE
+    if 'scan table' in plan or 'search table' in plan:
+        return 'sqlite'
+    return None
+
+def detect_explain_format(explain_plan):
+    if not explain_plan:
+        return 'unknown'
+    plan_text = explain_plan.strip()
+    # SQL Server tree format (prioritize this check)
+    if '|--' in plan_text or 'Clustered Index Scan' in plan_text or 'Hash Match' in plan_text or 'Nested Loops' in plan_text:
+        return 'sqlserver'
+    # Check for JSON format
+    if (plan_text.startswith('[') and plan_text.endswith(']')) or \
+       (plan_text.startswith('{') and plan_text.endswith('}')):
+        try:
+            json.loads(plan_text)
+            return 'json'
+        except json.JSONDecodeError:
+            pass
+    # Check for XML format (SQL Server ShowPlanXML)
+    if plan_text.startswith('<') or '<RelOp' in plan_text or '<ShowPlanXML' in plan_text:
+        return 'xml'
+    # Check for SQL Server specific formats (table style)
+    if any(keyword in plan_text for keyword in [
+        'StmtText', 'PhysicalOp', 'LogicalOp', 'EstimateRows', 'EstimateIO', 'EstimateCPU', 'TotalSubtreeCost',
+        'HashAggregate', 'NodeId', 'PhysicalOp=', 'LogicalOp=', 'EstimateRows='
+    ]):
+        return 'sqlserver'
+    # Check for PostgreSQL text format (has indentation and -> markers)
+    if '->' in plan_text or 'Planning Time:' in plan_text or 'Execution Time:' in plan_text:
+        return 'postgresql_text'
+    # Check for Oracle format (pipe-delimited or table format)
+    if '|' in plan_text and ('Id' in plan_text or 'OPERATION' in plan_text):
+        return 'oracle'
+    # Default to text format
+    return 'text'
+
+def parse_explain_to_json(explain_plan, db_engine):
+    """Parse explain plan with format detection and routing"""
+    if not explain_plan:
+        return None
+    
+    # Auto-detect format
+    detected_format = detect_explain_format(explain_plan)
+    
+    # Route to appropriate parser based on engine and format
+    if db_engine == 'postgresql':
+        if detected_format == 'json':
+            return parse_postgresql_json(explain_plan)
+        elif detected_format == 'xml':
+            return parse_postgresql_xml(explain_plan)
+        elif detected_format == 'postgresql_text':
+            return parse_postgresql_text(explain_plan)
+        else:
+            return parse_postgresql_text(explain_plan)  # fallback
+    elif db_engine == 'oracle':
+        if detected_format == 'oracle':
+            return parse_oracle_explain_flow(explain_plan)
+        else:
+            return parse_oracle_explain_flow(explain_plan)  # fallback
+    elif db_engine == 'sqlserver':
+        if detected_format == 'sqlserver':
+            return parse_sqlserver_explain_flow(explain_plan)
+        elif detected_format == 'xml':
+            return parse_sqlserver_xml(explain_plan)
+        else:
+            return parse_sqlserver_explain_flow(explain_plan)  # fallback
+    
+    return None
+
+def parse_postgresql_json(explain_plan):
+    """Parse PostgreSQL JSON format - richest data source"""
+    try:
+        data = json.loads(explain_plan)
+        return extract_from_postgresql_json(data)
+    except json.JSONDecodeError as e:
+        print(f"JSON parsing error: {e}")
+        return None
+
+def extract_from_postgresql_json(data):
+    """Extract execution tree from PostgreSQL JSON format"""
+    if not data or not isinstance(data, list) or len(data) == 0:
+        return None
+    
+    # PostgreSQL JSON format: [{"Plan": {...}}]
+    plan_data = data[0].get('Plan', {})
+    
+    execution_tree = {
+        'operation': 'Query Execution Plan',
+        'cost': 0,
+        'rows': 0,
+        'time': 0,
+        'buffers': {},
+        'children': []
+    }
+    
+    def extract_node_data(node):
+        """Extract metrics from a JSON node"""
+        node_data = {
+            'operation': node.get('Node Type', 'Unknown Operation'),
+            'cost': node.get('Total Cost', 0),
+            'startup_cost': node.get('Startup Cost', 0),
+            'rows': node.get('Actual Rows', node.get('Plan Rows', 0)),
+            'time': node.get('Actual Total Time', 0),
+            'buffers': node.get('Buffers', {}),
+            'children': []
+        }
+        
+        # Add relation name if available
+        if node.get('Relation Name'):
+            node_data['operation'] += f" on {node.get('Relation Name')}"
+        
+        # Add index name if available
+        if node.get('Index Name'):
+            node_data['operation'] += f" using {node.get('Index Name')}"
+        
+        # Add scan direction if available
+        if node.get('Scan Direction'):
+            node_data['operation'] += f" ({node.get('Scan Direction')})"
+        
+        # Add filter conditions if available
+        if node.get('Filter'):
+            node_data['filter'] = node.get('Filter')
+        
+        # Add join conditions if available
+        if node.get('Hash Cond'):
+            node_data['join_condition'] = node.get('Hash Cond')
+        
+        # Process children
+        if 'Plans' in node:
+            for child in node['Plans']:
+                child_data = extract_node_data(child)
+                node_data['children'].append(child_data)
+        
+        return node_data
+    
+    # Extract the main plan
+    main_plan = extract_node_data(plan_data)
+    execution_tree.update(main_plan)
+    
+    return execution_tree
+
+def parse_postgresql_xml(explain_plan):
+    """Parse PostgreSQL XML format"""
+    # TODO: Implement XML parsing for PostgreSQL
+    # For now, fallback to text parsing
+    return parse_postgresql_text(explain_plan)
+
+def parse_postgresql_text(explain_plan):
+    """Parse PostgreSQL TEXT format - enhanced version"""
+    lines = explain_plan.strip().split('\n')
+    
+    # Skip header lines
+    skip_patterns = ['Planning Time:', 'Execution Time:', 'QUERY PLAN', '---']
+    filtered_lines = []
+    for line in lines:
+        if not any(pattern in line for pattern in skip_patterns):
+            filtered_lines.append(line)
+    
+    if not filtered_lines:
+        return None
+    
+    # Parse the execution flow based on indentation
+    execution_tree = {
+        'operation': 'Query Execution Plan',
+        'cost': 0,
+        'rows': 0,
+        'time': 0,
+        'buffers': {},
+        'children': []
+    }
+    
+    # Stack to track parent nodes based on indentation
+    node_stack = [execution_tree]
+    indent_stack = [-1]  # Track indentation levels
+    
+    for line in filtered_lines:
+        if not line.strip():
+            continue
+            
+        # Calculate indentation level (count leading spaces or ->)
+        original_line = line
+        indent_level = 0
+        while line.startswith('  ') or line.startswith('-> '):
+            if line.startswith('-> '):
+                indent_level += 1
+                line = line[3:]
+            else:
+                indent_level += 1
+                line = line[2:]
+        
+        # Parse operation and metrics
+        operation, metrics = parse_enhanced_postgresql_line(line)
+        
+        if not operation:
+            continue
+        
+        # Create node
+        node = {
+            'operation': operation,
+            'cost': metrics.get('cost', 0),
+            'startup_cost': metrics.get('startup_cost', 0),
+            'rows': metrics.get('rows', 0),
+            'time': metrics.get('time', 0),
+            'buffers': metrics.get('buffers', {}),
+            'filter': metrics.get('filter'),
+            'join_condition': metrics.get('join_condition'),
+            'children': []
+        }
+        
+        # Find the correct parent based on indentation
+        while len(indent_stack) > 1 and indent_level <= indent_stack[-1]:
+            node_stack.pop()
+            indent_stack.pop()
+        
+        # Add to current parent
+        node_stack[-1]['children'].append(node)
+        
+        # Push this node onto stack for potential children
+        node_stack.append(node)
+        indent_stack.append(indent_level)
+    
+    return execution_tree
+
+def parse_enhanced_postgresql_line(line):
+    """Parse a single PostgreSQL operation line with enhanced metrics"""
+    line = line.strip()
+    
+    # Extract metrics from parentheses
+    metrics = {}
+    operation = line
+    
+    # Look for metrics in parentheses
+    if ' (cost=' in line:
+        parts = line.split(' (cost=', 1)
+        operation = parts[0].strip()
+        metrics_str = 'cost=' + parts[1]
+        
+        # Parse startup and total cost
+        cost_match = re.search(r'cost=([\d.]+)\.\.([\d.]+)', metrics_str)
+        if cost_match:
+            metrics['startup_cost'] = float(cost_match.group(1))
+            metrics['cost'] = float(cost_match.group(2))
+        
+        # Parse rows
+        rows_match = re.search(r'rows=(\d+)', metrics_str)
+        if rows_match:
+            metrics['rows'] = int(rows_match.group(1))
+        
+        # Parse actual time if available
+        time_match = re.search(r'actual time=([\d.]+)\.\.([\d.]+)', metrics_str)
+        if time_match:
+            metrics['time'] = float(time_match.group(2))  # Use end time
+        
+        # Parse width
+        width_match = re.search(r'width=(\d+)', metrics_str)
+        if width_match:
+            metrics['width'] = int(width_match.group(1))
+        
+        # Parse buffer information
+        buffers_match = re.search(r'Buffers: (.*?)(?:\s|$)', metrics_str)
+        if buffers_match:
+            buffers_str = buffers_match.group(1)
+            metrics['buffers'] = parse_buffer_info(buffers_str)
+    
+    # Extract filter conditions
+    filter_match = re.search(r'Filter: (.+?)(?:\s|$)', line)
+    if filter_match:
+        metrics['filter'] = filter_match.group(1)
+    
+    # Extract join conditions
+    join_match = re.search(r'Hash Cond: (.+?)(?:\s|$)', line)
+    if join_match:
+        metrics['join_condition'] = join_match.group(1)
+    
+    # Clean up operation name
+    operation = operation.replace('_', ' ').title()
+    
+    return operation, metrics
+
+def parse_buffer_info(buffers_str):
+    """Parse PostgreSQL buffer information"""
+    buffers = {}
+    
+    # Parse shared hit/read/written
+    shared_hit = re.search(r'shared hit=(\d+)', buffers_str)
+    if shared_hit:
+        buffers['shared_hit'] = int(shared_hit.group(1))
+    
+    shared_read = re.search(r'shared read=(\d+)', buffers_str)
+    if shared_read:
+        buffers['shared_read'] = int(shared_read.group(1))
+    
+    shared_written = re.search(r'shared written=(\d+)', buffers_str)
+    if shared_written:
+        buffers['shared_written'] = int(shared_written.group(1))
+    
+    return buffers
+
+def parse_sqlserver_xml(explain_plan):
+    """Parse SQL Server XML format"""
+    # TODO: Implement XML parsing for SQL Server
+    # For now, fallback to text parsing
+    return parse_sqlserver_explain_flow(explain_plan)
+
 def analyze_execution_plan_metrics(execution_tree, db_engine):
     """Analyze execution plan metrics and generate optimization recommendations"""
     recommendations = []

@@ -3,6 +3,90 @@
 // Initialize DOM elements when they're available
 let cell_input, cell_output, textarea;
 
+// Load Sample Data functionality
+function loadSampleData(engine) {
+    if (engine === 'sqlserver') {
+        // Load SQL Server sample data
+        const sampleData = SQL_SERVER_SAMPLE_DATA;
+        
+        // Populate the form fields
+        document.getElementById('sql_query_textarea').value = sampleData.sql_query;
+        document.getElementById('explain_plan_textarea').value = sampleData.explain_plan_xml;
+        
+        // Note: We don't automatically change the selected database engine
+        // The user should manually select the appropriate engine for their data
+        
+        // Clear existing tables and add the sample tables
+        const tablesContainer = document.getElementById('tables-container');
+        if (tablesContainer) {
+            tablesContainer.innerHTML = '';
+            
+            // Add Customers table
+            addTable('Customers', sampleData.table_ddl.split('-- Customers table')[1].split('-- Orders table')[0].trim(), '5000', '2MB');
+            
+            // Add Orders table
+            addTable('Orders', sampleData.table_ddl.split('-- Orders table')[1].split('-- OrderDetails table')[0].trim(), '50000', '15MB');
+            
+            // Add OrderDetails table
+            addTable('OrderDetails', sampleData.table_ddl.split('-- OrderDetails table')[1].trim(), '100000', '25MB');
+        }
+        
+        // Add indexes section
+        const indexesContainer = document.getElementById('indexes-container');
+        if (indexesContainer) {
+            indexesContainer.innerHTML = '';
+            
+            // Add the sample indexes
+            const indexStatements = sampleData.index_ddl.split('\n').filter(line => line.trim().startsWith('CREATE INDEX'));
+            indexStatements.forEach(indexStmt => {
+                const match = indexStmt.match(/CREATE INDEX (\w+) ON (\w+)/);
+                if (match) {
+                    const indexName = match[1];
+                    const tableName = match[2];
+                    addIndex(tableName, indexName, indexStmt, 'Active');
+                }
+            });
+        }
+        
+        // Show success message
+        showNotification('SQL Server sample data loaded successfully! Check the analysis for performance insights.', 'success');
+        
+        // Trigger any necessary updates
+        if (typeof updateEngineTips === 'function') {
+            updateEngineTips();
+        }
+        
+        // Trigger validation
+        if (typeof validateExplain === 'function') {
+            validateExplain();
+        }
+    } else {
+        showNotification('Sample data not available for this engine yet.', 'info');
+    }
+}
+
+// Show notification function
+function showNotification(message, type = 'info') {
+    // Create notification element
+    const notification = document.createElement('div');
+    notification.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
+    notification.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+    notification.innerHTML = `
+        ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    `;
+    
+    // Add to page
+    document.body.appendChild(notification);
+    
+    // Auto-remove after 5 seconds
+    setTimeout(() => {
+        if (notification.parentNode) {
+            notification.remove();
+        }
+    }, 5000);
+}
+
 // Create a Resize function and add a Resize observer on the textbox //
 // All text functions should go here 
 
@@ -680,40 +764,159 @@ function generateExplainVisualization() {
 }
 
 function renderD3Tree(treeData, container) {
-    // Set dimensions with much more generous spacing for text
-    const margin = {top: 30, right: 300, bottom: 50, left: 300}; // Dramatically increased margins for text space
-    const width = Math.max(container.clientWidth - margin.right - margin.left, 800); // Ensure minimum width
-    const height = 800 - margin.top - margin.bottom;
-
-    // Clear container
+    // Responsive SVG dimensions
+    const margin = {top: 30, right: 300, bottom: 50, left: 300};
+    const minWidth = 800;
+    const minHeight = 800;
+    const width = Math.max(container.clientWidth - margin.right - margin.left, minWidth);
+    const height = Math.max(container.clientHeight - margin.top - margin.bottom, minHeight);
     container.innerHTML = '';
 
-    // Create SVG with much larger dimensions to accommodate text
+    // --- Controls Toolbar ---
+    const controlsDiv = document.createElement('div');
+    controlsDiv.style.display = 'flex';
+    controlsDiv.style.justifyContent = 'flex-start';
+    controlsDiv.style.gap = '12px';
+    controlsDiv.style.marginBottom = '10px';
+    controlsDiv.style.flexWrap = 'wrap';
+    controlsDiv.style.padding = '10px';
+    controlsDiv.style.backgroundColor = '#f8fafc';
+    controlsDiv.style.borderRadius = '8px';
+    controlsDiv.style.border = '1px solid #e2e8f0';
+    
+    // Create buttons with proper styling and event prevention
+    const buttonData = [
+        {id: 'zoom-in-btn', text: '🔍 Zoom In', title: 'Zoom In'},
+        {id: 'zoom-out-btn', text: '🔍 Zoom Out', title: 'Zoom Out'},
+        {id: 'fit-btn', text: '📐 Fit to Page', title: 'Fit to Page'},
+        {id: 'download-png-btn', text: '📷 Download PNG', title: 'Download as PNG'},
+        {id: 'download-svg-btn', text: '🖼️ Download SVG', title: 'Download as SVG'}
+    ];
+    
+    buttonData.forEach(btn => {
+        const button = document.createElement('button');
+        button.id = btn.id;
+        button.title = btn.title;
+        button.textContent = btn.text;
+        button.type = 'button'; // Prevent form submission
+        button.style.cssText = `
+            padding: 8px 16px;
+            font-weight: 600;
+            font-size: 14px;
+            border: 2px solid #3b82f6;
+            border-radius: 6px;
+            background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+            color: white;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            min-width: fit-content;
+            white-space: nowrap;
+        `;
+        
+        // Add hover effects
+        button.addEventListener('mouseenter', function() {
+            this.style.transform = 'translateY(-1px)';
+            this.style.boxShadow = '0 4px 8px rgba(0,0,0,0.2)';
+        });
+        
+        button.addEventListener('mouseleave', function() {
+            this.style.transform = 'translateY(0)';
+            this.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
+        });
+        
+        // Prevent form submission
+        button.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        });
+        
+        controlsDiv.appendChild(button);
+    });
+    
+    container.appendChild(controlsDiv);
+
+    // --- SVG ---
     const svg = d3.select(container).append("svg")
         .attr("width", width + margin.right + margin.left)
         .attr("height", height + margin.top + margin.bottom)
-        .style("overflow", "visible") // Allow content to overflow
+        .style("overflow", "auto")
+        .style("max-width", "100%")
+        .style("display", "block")
+        .attr("viewBox", `0 0 ${width + margin.right + margin.left} ${height + margin.top + margin.bottom}`)
         .append("g")
         .attr("transform", `translate(${margin.left},${margin.top})`);
 
-    // Add zoom behavior
+    // --- Zoom Behavior ---
     const zoom = d3.zoom()
-        .scaleExtent([0.5, 3])
+        .scaleExtent([0.3, 4])
         .on("zoom", (event) => {
             svg.attr("transform", event.transform);
         });
-
     d3.select(container).select("svg").call(zoom);
 
-    // Use the tree data directly from backend (actual execution flow)
+    // --- Zoom Controls ---
+    let currentTransform = d3.zoomIdentity;
+    d3.select(container).select("svg").on("wheel.zoom", null); // prevent double zoom
+    
+    // Wait for buttons to be created before attaching handlers
+    setTimeout(() => {
+        // Zoom In
+        const zoomInBtn = document.getElementById('zoom-in-btn');
+        if (zoomInBtn) {
+            zoomInBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                currentTransform = currentTransform.scale(1.2);
+                d3.select(container).select("svg").transition().duration(300).call(zoom.transform, currentTransform);
+            });
+        }
+        
+        // Zoom Out
+        const zoomOutBtn = document.getElementById('zoom-out-btn');
+        if (zoomOutBtn) {
+            zoomOutBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                currentTransform = currentTransform.scale(0.8);
+                d3.select(container).select("svg").transition().duration(300).call(zoom.transform, currentTransform);
+            });
+        }
+        
+        // Fit to Page
+        const fitBtn = document.getElementById('fit-btn');
+        if (fitBtn) {
+            fitBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                d3.select(container).select("svg").transition().duration(300).call(zoom.transform, d3.zoomIdentity);
+                currentTransform = d3.zoomIdentity;
+            });
+        }
+        
+        // Download PNG
+        const downloadPngBtn = document.getElementById('download-png-btn');
+        if (downloadPngBtn) {
+            downloadPngBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                exportToPNG(container.querySelector("svg"));
+            });
+        }
+        
+        // Download SVG
+        const downloadSvgBtn = document.getElementById('download-svg-btn');
+        if (downloadSvgBtn) {
+            downloadSvgBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                exportToSVG(container.querySelector("svg"));
+            });
+        }
+    }, 100); // Small delay to ensure buttons are created
+
+    // --- Tree Layout ---
     const root = d3.hierarchy(treeData, d => d.children);
-    
-    // Calculate performance metrics for color coding
-    let maxCost = 0;
-    let maxTime = 0;
-    let maxBufferReads = 0;
-    let performanceHotspots = [];
-    
+    let maxCost = 0, maxTime = 0, maxBufferReads = 0, performanceHotspots = [];
     root.each(d => {
         if (d.data.cost > maxCost) maxCost = d.data.cost;
         if (d.data.time > maxTime) maxTime = d.data.time;
@@ -721,416 +924,461 @@ function renderD3Tree(treeData, container) {
             maxBufferReads = d.data.buffers.shared_read;
         }
     });
-    
-    // Identify performance hotspots (top 20% by cost)
     const allNodes = root.descendants().filter(d => d.data.cost > 0);
     allNodes.sort((a, b) => b.data.cost - a.data.cost);
     const hotspotCount = Math.max(1, Math.floor(allNodes.length * 0.2));
     performanceHotspots = allNodes.slice(0, hotspotCount).map(d => d.data.cost);
-    
-    // Enhanced color scale with more vibrant colors
     const colorScale = d3.scaleLinear()
         .domain([0, Math.max(maxCost, maxTime * 100, maxBufferReads * 10)])
-        .range(["#10b981", "#f59e0b", "#ef4444"]); // Green -> Orange -> Red
-
-    // Assigns the data to a hierarchy using parent-child relationships
-    // Increase separation between nodes to prevent overlap
-    const tree = d3.tree().size([width, height]).separation((a, b) => {
-        // Increase separation between siblings to prevent text overlap
-        return (a.parent === b.parent ? 2.0 : 2.5); // Increased separation
-    });
-
-    // Assigns the data to a hierarchy using parent-child relationships
+        .range(["#10b981", "#f59e0b", "#ef4444"]);
+    const tree = d3.tree().size([width, height]).separation((a, b) => (a.parent === b.parent ? 2.0 : 2.5));
     const treeData2 = tree(root);
-
-    // Compute the new tree layout
     const nodes = treeData2.descendants();
     const links = treeData2.links();
 
-    // Declare the links with enhanced styling
-    const link = svg.selectAll(".link")
+    
+    // --- Enhanced Flow Lines with Proper Arrows ---
+    // Add arrow marker for flow direction
+    const arrowMarker = svg.append("defs").append("marker")
+        .attr("id", "arrowhead")
+        .attr("viewBox", "0 -10 20 20")
+        .attr("refX", 15)
+        .attr("refY", 0)
+        .attr("markerWidth", 20)
+        .attr("markerHeight", 20)
+        .attr("orient", "auto");
+    
+    arrowMarker.append("path")
+        .attr("d", "M0,-8L15,0L0,8")
+        .attr("fill", "#ef4444")
+        .attr("stroke", "#ef4444")
+        .attr("stroke-width", 2);
+    
+    // Create custom link paths with arrows
+    svg.selectAll(".link")
         .data(links)
         .enter().append("path")
         .attr("class", "link")
-        .attr("d", d3.linkVertical()
-            .x(d => d.x)
-            .y(d => d.y))
+        .attr("d", d => {
+            const sourceX = d.source.x;
+            const sourceY = d.source.y;
+            const targetX = d.target.x;
+            const targetY = d.target.y;
+            
+            // Calculate node dimensions for proper arrow positioning
+            const sourceRadius = 60;
+            const targetRadius = 60;
+            
+            // Start from bottom of source node
+            const startY = sourceY + sourceRadius + 20;
+            
+            // End at top of target node with space for arrow
+            const endY = targetY - targetRadius - 20;
+            
+            // Create a smooth curve that clearly shows the flow direction
+            const controlY = (startY + endY) / 2;
+            
+            const path = `M${sourceX},${startY} Q${sourceX},${controlY} ${targetX},${endY}`;
+            return path;
+        })
         .style("fill", "none")
-        .style("stroke", "#3b82f6")
-        .style("stroke-width", 2.5)
-        .style("stroke-opacity", 0.8);
+        .style("stroke", "#ef4444")
+        .style("stroke-width", 4)
+        .style("stroke-opacity", 1)
+        .attr("marker-end", "url(#arrowhead)")
+        .style("filter", "drop-shadow(0 2px 4px rgba(0,0,0,0.2))")
+        .on("mouseover", function() {
+            d3.select(this).style("stroke-width", 6).style("stroke", "#dc2626");
+        })
+        .on("mouseout", function() {
+            d3.select(this).style("stroke-width", 4).style("stroke", "#ef4444");
+        });
 
-    // Declare the nodes
+    // --- Enhanced Node Data with More Metrics ---
+    function enhanceNodeData(d) {
+        const enhanced = { ...d.data };
+        
+        // Add estimated vs actual metrics
+        enhanced.estimated_rows = d.data.rows;
+        enhanced.actual_rows = d.data.actual_rows || d.data.rows;
+        enhanced.row_accuracy = enhanced.actual_rows && enhanced.estimated_rows ? 
+            Math.abs(enhanced.actual_rows - enhanced.estimated_rows) / enhanced.estimated_rows : 0;
+        
+        // Add I/O metrics
+        enhanced.io_reads = d.data.buffers?.shared_read || 0;
+        enhanced.io_hits = d.data.buffers?.shared_hit || 0;
+        enhanced.io_writes = d.data.buffers?.shared_written || 0;
+        
+        // Add CPU and time metrics
+        enhanced.cpu_time = d.data.cpu_time || 0;
+        enhanced.elapsed_time = d.data.time || 0;
+        
+        // Add warnings and performance indicators
+        enhanced.warnings = [];
+        if (enhanced.row_accuracy > 0.5 && enhanced.estimated_rows > 0) enhanced.warnings.push("Row estimate inaccurate");
+        if (enhanced.io_reads > 1000) enhanced.warnings.push("High I/O reads");
+        if (enhanced.cost > maxCost * 0.8 && maxCost > 0) enhanced.warnings.push("High cost operation");
+        if (enhanced.elapsed_time > 100) enhanced.warnings.push("Slow execution");
+        
+        return enhanced;
+    }
+
+    // --- Node shape/color logic ---
+    function getNodeShape(operation) {
+        if (!operation) return 'circle';
+        const op = operation.toLowerCase();
+        if (op.includes('join')) return 'rect';
+        if (op.includes('sort')) return 'diamond';
+        if (op.includes('scan')) return 'ellipse';
+        if (op.includes('aggregate')) return 'hex';
+        if (op.includes('seek')) return 'ellipse';
+        if (op.includes('hash')) return 'rect';
+        if (op.includes('filter')) return 'triangle';
+        return 'circle';
+    }
+    function getNodeColor(operation, cost) {
+        if (!operation) return colorScale(0);
+        const op = operation.toLowerCase();
+        if (op.includes('join')) return '#f59e0b';
+        if (op.includes('sort')) return '#6366f1';
+        if (op.includes('scan')) return '#10b981';
+        if (op.includes('aggregate')) return '#a21caf';
+        if (op.includes('seek')) return '#0ea5e9';
+        if (op.includes('hash')) return '#f43f5e';
+        if (op.includes('filter')) return '#fbbf24';
+        return colorScale(cost);
+    }
+    function getTextWidth(text, fontSize = 16, fontWeight = 'bold') {
+        const tempSvg = d3.select('body').append('svg').attr('style', 'position:absolute;left:-9999px;top:-9999px');
+        const tempText = tempSvg.append('text').attr('font-size', fontSize).attr('font-weight', fontWeight).text(text);
+        const width = tempText.node().getComputedTextLength();
+        tempSvg.remove();
+        return width;
+    }
+    
+    // Find costliest node(s)
+    const maxCostNodes = nodes.filter(d => d.data.cost === maxCost && maxCost > 0);
+    
+    function drawNodeShape(g, d, r) {
+        const enhancedData = enhanceNodeData(d);
+        const shape = getNodeShape(d.data.operation);
+        const opText = d.data.operation || '';
+        const metricsText = `Cost: ${d.data.cost} Rows: ${d.data.rows}`;
+        const opWidth = getTextWidth(opText, 18, 'bold');
+        const metricsWidth = getTextWidth(metricsText, 15, 'normal');
+        const minW = 120, minH = 60;
+        const maxWidth = Math.max(opWidth, metricsWidth, r * 2, minW) + 36;
+        const maxHeight = Math.max(r * 2 + 36, minH);
+        const isHot = d.data.cost === maxCost && maxCost > 0;
+        const hasWarnings = enhancedData.warnings.length > 0;
+        
+        // Draw main shape
+        if (shape === 'rect') {
+            g.append('rect')
+                .attr('x', -maxWidth/2)
+                .attr('y', -maxHeight/2)
+                .attr('width', maxWidth)
+                .attr('height', maxHeight)
+                .attr('rx', 14)
+                .attr('fill', getNodeColor(d.data.operation, d.data.cost))
+                .attr('stroke', isHot ? '#ef4444' : (hasWarnings ? '#f59e0b' : '#1f2937'))
+                .attr('stroke-width', isHot ? 6 : (hasWarnings ? 4 : 2.5))
+                .attr('filter', isHot ? 'drop-shadow(0 0 12px #ef4444)' : (hasWarnings ? 'drop-shadow(0 0 8px #f59e0b)' : null));
+        } else if (shape === 'diamond') {
+            g.append('polygon')
+                .attr('points', `0,-${maxHeight/2} ${maxWidth/2},0 0,${maxHeight/2} -${maxWidth/2},0`)
+                .attr('fill', getNodeColor(d.data.operation, d.data.cost))
+                .attr('stroke', isHot ? '#ef4444' : (hasWarnings ? '#f59e0b' : '#1f2937'))
+                .attr('stroke-width', isHot ? 6 : (hasWarnings ? 4 : 2.5))
+                .attr('filter', isHot ? 'drop-shadow(0 0 12px #ef4444)' : (hasWarnings ? 'drop-shadow(0 0 8px #f59e0b)' : null));
+        } else if (shape === 'ellipse') {
+            g.append('ellipse')
+                .attr('cx', 0)
+                .attr('cy', 0)
+                .attr('rx', maxWidth/2)
+                .attr('ry', maxHeight/2.2)
+                .attr('fill', getNodeColor(d.data.operation, d.data.cost))
+                .attr('stroke', isHot ? '#ef4444' : (hasWarnings ? '#f59e0b' : '#1f2937'))
+                .attr('stroke-width', isHot ? 6 : (hasWarnings ? 4 : 2.5))
+                .attr('filter', isHot ? 'drop-shadow(0 0 12px #ef4444)' : (hasWarnings ? 'drop-shadow(0 0 8px #f59e0b)' : null));
+        } else if (shape === 'hex') {
+            const hexPoints = Array.from({length: 6}, (_, i) => {
+                const angle = Math.PI / 3 * i;
+                return [maxWidth/2 * Math.cos(angle), maxHeight/2.2 * Math.sin(angle)];
+            });
+            g.append('polygon')
+                .attr('points', hexPoints.map(p => p.join(",")).join(' '))
+                .attr('fill', getNodeColor(d.data.operation, d.data.cost))
+                .attr('stroke', isHot ? '#ef4444' : (hasWarnings ? '#f59e0b' : '#1f2937'))
+                .attr('stroke-width', isHot ? 6 : (hasWarnings ? 4 : 2.5))
+                .attr('filter', isHot ? 'drop-shadow(0 0 12px #ef4444)' : (hasWarnings ? 'drop-shadow(0 0 8px #f59e0b)' : null));
+        } else if (shape === 'triangle') {
+            g.append('polygon')
+                .attr('points', `0,-${maxHeight/2} ${maxWidth/2},${maxHeight/2} -${maxWidth/2},${maxHeight/2}`)
+                .attr('fill', getNodeColor(d.data.operation, d.data.cost))
+                .attr('stroke', isHot ? '#ef4444' : (hasWarnings ? '#f59e0b' : '#1f2937'))
+                .attr('stroke-width', isHot ? 6 : (hasWarnings ? 4 : 2.5))
+                .attr('filter', isHot ? 'drop-shadow(0 0 12px #ef4444)' : (hasWarnings ? 'drop-shadow(0 0 8px #f59e0b)' : null));
+        } else {
+            g.append('ellipse')
+                .attr('cx', 0)
+                .attr('cy', 0)
+                .attr('rx', maxWidth/2)
+                .attr('ry', maxHeight/2.2)
+                .attr('fill', getNodeColor(d.data.operation, d.data.cost))
+                .attr('stroke', isHot ? '#ef4444' : (hasWarnings ? '#f59e0b' : '#1f2937'))
+                .attr('stroke-width', isHot ? 6 : (hasWarnings ? 4 : 2.5))
+                .attr('filter', isHot ? 'drop-shadow(0 0 12px #ef4444)' : (hasWarnings ? 'drop-shadow(0 0 8px #f59e0b)' : null));
+        }
+        
+        // HOT badge - positioned to the right of the node to avoid blocking content
+        if (isHot) {
+            g.append('text')
+                .attr('x', maxWidth/2 + 25)
+                .attr('y', 0)
+                .attr('text-anchor', 'middle')
+                .attr('font-size', '1.1em')
+                .attr('font-weight', 'bold')
+                .attr('fill', '#ef4444')
+                .attr('stroke', 'white')
+                .attr('stroke-width', 1.5)
+                .text('🔥 HOT');
+        }
+        
+        // Warning badge - positioned on the node itself
+        if (hasWarnings && !isHot) {
+            g.append('text')
+                .attr('x', maxWidth/2 - 15)
+                .attr('y', -maxHeight/2 + 15)
+                .attr('text-anchor', 'middle')
+                .attr('font-size', '1.1em')
+                .attr('font-weight', 'bold')
+                .attr('fill', '#f59e0b')
+                .attr('stroke', 'white')
+                .attr('stroke-width', 1.5)
+                .text('⚠️');
+        }
+    }
+
+    // --- Draw nodes ---
     const node = svg.selectAll(".node")
         .data(nodes)
         .enter().append("g")
         .attr("class", "node")
-        .attr("transform", d => `translate(${d.x},${d.y})`);
+        .attr("transform", d => `translate(${d.x},${d.y})`)
+        .style("cursor", "pointer");
 
-    // Add the circles for the nodes with enhanced styling and sizing
-    node.append("circle")
-        .attr("r", d => {
-            // Larger circles for performance hotspots and more dynamic sizing
-            const baseRadius = 20; // Increased base radius
-            if (performanceHotspots.includes(d.data.cost)) {
-                return baseRadius + 8;
+    node.each(function(d) {
+        const g = d3.select(this);
+        const baseRadius = 36;
+        drawNodeShape(g, d, baseRadius);
+    });
+
+    // --- Enhanced Node labels and metrics ---
+    node.append("text")
+        .attr("dy", "-1.2em")
+        .attr("text-anchor", "middle")
+        .attr("font-weight", 600)
+        .attr("font-size", "1.1em")
+        .text(d => {
+            if (d.data.operation === 'Query Execution Plan') {
+                return 'SQL Execution Plan';
             }
-            if (d.data.cost > maxCost * 0.5) {
-                return baseRadius + 4;
-            }
-            return baseRadius;
-        })
-        .style("fill", d => {
-            // Enhanced multi-factor color coding
-            const costFactor = d.data.cost / maxCost;
-            const timeFactor = d.data.time / maxTime;
-            const bufferFactor = d.data.buffers ? d.data.buffers.shared_read / maxBufferReads : 0;
-            
-            const totalFactor = Math.max(costFactor, timeFactor, bufferFactor);
-            return colorScale(totalFactor * Math.max(maxCost, maxTime * 100, maxBufferReads * 10));
-        })
-        .style("stroke", d => {
-            // Enhanced stroke styling
-            if (performanceHotspots.includes(d.data.cost)) {
-                return "#1f2937";
-            }
-            return d.data.cost === maxCost ? "#1f2937" : "#ffffff";
-        })
-        .style("stroke-width", d => {
-            if (performanceHotspots.includes(d.data.cost)) {
-                return 4;
-            }
-            return d.data.cost === maxCost ? 3 : 2.5;
-        })
-        .style("stroke-dasharray", d => {
-            // Dashed border for I/O heavy operations
-            if (d.data.buffers && d.data.buffers.shared_read > 0) {
-                return "6,6";
-            }
-            return "none";
-        })
-        .style("filter", d => {
-            // Add shadow for hotspots
-            if (performanceHotspots.includes(d.data.cost)) {
-                return "drop-shadow(0 4px 8px rgba(0,0,0,0.3))";
-            }
-            return "drop-shadow(0 2px 4px rgba(0,0,0,0.1))";
+            return d.data.operation || 'Operation';
         });
 
-    // Function to calculate optimal text position to avoid overlap and truncation
-    function calculateTextPosition(d, textType) {
-        const baseOffset = 50; // Much larger base offset for more space
-        const verticalSpacing = {
-            'operation': 0,
-            'metrics': 2.5,
-            'indicators': 4.2
-        };
-        
-        let xOffset = baseOffset;
-        let yOffset = verticalSpacing[textType] || 0;
-        
-        // Determine if text should be on left or right side
-        const hasChildren = d.children && d.children.length > 0;
-        const isLeftSide = hasChildren;
-        
-        if (isLeftSide) {
-            xOffset = -xOffset;
-        }
-        
-        return {
-            x: xOffset,
-            y: yOffset,
-            anchor: isLeftSide ? "end" : "start"
-        };
-    }
-
-    // Add labels for the nodes with improved spacing and collision avoidance
     node.append("text")
-        .attr("class", "operation-label")
-        .attr("dy", d => calculateTextPosition(d, 'operation').y + "em")
-        .attr("x", d => calculateTextPosition(d, 'operation').x)
-        .style("text-anchor", d => calculateTextPosition(d, 'operation').anchor)
-        .text(d => d.data.operation)
-        .style("font-size", "13px")
-        .style("font-weight", "600")
-        .style("fill", "#1f2937")
-        .style("text-shadow", "0 1px 2px rgba(255,255,255,0.8)")
-        .style("letter-spacing", "0.5px")
-        .style("dominant-baseline", "middle");
+        .attr("dy", "0.2em")
+        .attr("text-anchor", "middle")
+        .attr("font-size", "0.95em")
+        .text(d => d.data.logical_op ? d.data.logical_op : '');
 
-    // Add enhanced metrics text with better spacing - ALWAYS SHOW METRICS
     node.append("text")
-        .attr("class", "metrics")
-        .attr("dy", d => calculateTextPosition(d, 'metrics').y + "em")
-        .attr("x", d => calculateTextPosition(d, 'metrics').x)
-        .style("text-anchor", d => calculateTextPosition(d, 'metrics').anchor)
-        .text(d => {
-            // Debug: Log the data to see what's available
-            console.log("Node data:", d.data);
-            
-            let metrics = [];
-            // Always show cost if available
-            if (d.data.cost !== undefined && d.data.cost !== null) {
-                metrics.push(`Cost: ${d.data.cost.toFixed(2)}`);
-            }
-            // Always show rows if available
-            if (d.data.rows !== undefined && d.data.rows !== null) {
-                metrics.push(`Rows: ${d.data.rows.toLocaleString()}`);
-            }
-            // Always show time if available
-            if (d.data.time !== undefined && d.data.time !== null && d.data.time > 0) {
-                metrics.push(`Time: ${d.data.time.toFixed(2)}ms`);
-            }
-            // Show buffers if available
-            if (d.data.buffers && d.data.buffers.shared_read > 0) {
-                metrics.push(`I/O: ${d.data.buffers.shared_read}`);
-            }
-            // If no metrics available, show a placeholder
-            if (metrics.length === 0) {
-                metrics.push("No metrics available");
-            }
-            
-            const metricsText = metrics.join(" | ");
-            console.log("Metrics text:", metricsText);
-            return metricsText;
-        })
-        .style("font-size", "11px")
-        .style("fill", "#6b7280")
-        .style("font-weight", "500")
-        .style("text-shadow", "0 1px 2px rgba(255,255,255,0.8)")
-        .style("dominant-baseline", "middle")
-        .style("overflow", "visible")
-        .style("white-space", "normal");
+        .attr("dy", "1.4em")
+        .attr("text-anchor", "middle")
+        .attr("font-size", "0.9em")
+        .text(d => `Cost: ${d.data.cost}`);
 
-    // Add performance indicators with improved spacing
     node.append("text")
-        .attr("class", "performance-indicators")
-        .attr("dy", d => calculateTextPosition(d, 'indicators').y + "em")
-        .attr("x", d => calculateTextPosition(d, 'indicators').x)
-        .style("text-anchor", d => calculateTextPosition(d, 'indicators').anchor)
-        .text(d => {
-            let indicators = [];
-            if (performanceHotspots.includes(d.data.cost)) {
-                indicators.push("🔥 Hotspot");
-            }
-            if (d.data.buffers && d.data.buffers.shared_read > maxBufferReads * 0.5) {
-                indicators.push("💾 I/O Heavy");
-            }
-            if (d.data.time > maxTime * 0.5) {
-                indicators.push("⏱️ Slow");
-            }
-            return indicators.join(" ");
-        })
-        .style("font-size", "10px")
-        .style("fill", "#dc2626")
-        .style("font-weight", "bold")
-        .style("text-shadow", "0 1px 2px rgba(255,255,255,0.8)")
-        .style("dominant-baseline", "middle");
+        .attr("dy", "2.2em")
+        .attr("text-anchor", "middle")
+        .attr("font-size", "0.9em")
+        .text(d => `Rows: ${d.data.rows}`);
 
-    // Add tooltips with detailed information
+    node.append("text")
+        .attr("dy", "3.0em")
+        .attr("text-anchor", "middle")
+        .attr("font-size", "0.9em")
+        .text(d => d.data.time ? `Time: ${d.data.time}` : '');
+
+    node.append("text")
+        .attr("dy", "3.8em")
+        .attr("text-anchor", "middle")
+        .attr("font-size", "0.9em")
+        .text(d => (d.data.buffers && d.data.buffers.shared_read) ? `I/O: ${d.data.buffers.shared_read}` : '');
+
+    // --- Enhanced Tooltips with Detailed Metrics ---
     node.append("title")
         .text(d => {
-            let tooltip = `Operation: ${d.data.operation}\n`;
-            tooltip += `Cost: ${d.data.cost.toFixed(2)}\n`;
-            tooltip += `Rows: ${d.data.rows.toLocaleString()}\n`;
-            if (d.data.time > 0) tooltip += `Time: ${d.data.time.toFixed(2)}ms\n`;
-            if (d.data.buffers) {
-                if (d.data.buffers.shared_hit) tooltip += `Buffer Hits: ${d.data.buffers.shared_hit}\n`;
-                if (d.data.buffers.shared_read) tooltip += `Buffer Reads: ${d.data.buffers.shared_read}\n`;
-                if (d.data.buffers.shared_written) tooltip += `Buffer Writes: ${d.data.buffers.shared_written}\n`;
+            const enhancedData = enhanceNodeData(d);
+            let t = `Operation: ${d.data.operation}\n`;
+            if (d.data.logical_op) t += `Logical Op: ${d.data.logical_op}\n`;
+            t += `Cost: ${d.data.cost}\n`;
+            t += `Estimated Rows: ${enhancedData.estimated_rows}\n`;
+            if (enhancedData.actual_rows !== enhancedData.estimated_rows) {
+                t += `Actual Rows: ${enhancedData.actual_rows}\n`;
+                t += `Row Accuracy: ${(enhancedData.row_accuracy * 100).toFixed(1)}% off\n`;
             }
-            if (d.data.filter) tooltip += `Filter: ${d.data.filter}\n`;
-            if (d.data.join_condition) tooltip += `Join: ${d.data.join_condition}\n`;
-            if (performanceHotspots.includes(d.data.cost)) tooltip += `\n🔥 Performance Hotspot`;
-            return tooltip;
+            if (enhancedData.io_reads > 0) t += `I/O Reads: ${enhancedData.io_reads}\n`;
+            if (enhancedData.io_hits > 0) t += `I/O Hits: ${enhancedData.io_hits}\n`;
+            if (enhancedData.cpu_time > 0) t += `CPU Time: ${enhancedData.cpu_time}ms\n`;
+            if (enhancedData.elapsed_time > 0) t += `Elapsed Time: ${enhancedData.elapsed_time}ms\n`;
+            if (d.data.node_id) t += `NodeId: ${d.data.node_id}\n`;
+            if (d.data.cost === maxCost && maxCost > 0) t += `\n🔥 HOT (Costliest)`;
+            if (enhancedData.warnings.length > 0) {
+                t += `\n⚠️ Warnings:\n${enhancedData.warnings.join('\n')}`;
+            }
+            return t;
         });
 
-    // Add controls with enhanced styling - REMOVED DOWNLOAD PNG AND COPY MERMAID BUTTONS
-    const controls = d3.select(container).append("div")
-        .style("margin-top", "15px")
-        .style("text-align", "center")
-        .style("padding", "10px")
-        .style("background", "linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)")
-        .style("border-radius", "8px")
-        .style("border", "1px solid #cbd5e1");
-
-    controls.append("button")
-        .text("🔍 Fit to Screen")
-        .style("margin", "0 8px")
-        .style("padding", "8px 16px")
-        .style("background", "linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)")
-        .style("color", "white")
-        .style("border", "none")
-        .style("border-radius", "6px")
-        .style("font-weight", "600")
-        .style("cursor", "pointer")
-        .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)")
-        .on("mouseover", function() {
-            d3.select(this).style("transform", "translateY(-1px)").style("box-shadow", "0 4px 8px rgba(0,0,0,0.2)");
-        })
-        .on("mouseout", function() {
-            d3.select(this).style("transform", "translateY(0)").style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)");
-        })
-        .on("click", () => {
-            d3.select(container).select("svg").transition().duration(750).call(
-                zoom.transform,
-                d3.zoomIdentity
-            );
+    // --- Click to Expand Functionality ---
+    node.on("click", function(event, d) {
+        const enhancedData = enhanceNodeData(d);
+        const details = `
+            <div style="padding: 15px; background: white; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); max-width: 400px;">
+                <h4 style="margin: 0 0 10px 0; color: #1f2937;">${d.data.operation}</h4>
+                <div style="font-size: 14px; line-height: 1.5;">
+                    <p><strong>Cost:</strong> ${d.data.cost}</p>
+                    <p><strong>Estimated Rows:</strong> ${enhancedData.estimated_rows}</p>
+                    ${enhancedData.actual_rows !== enhancedData.estimated_rows ? 
+                        `<p><strong>Actual Rows:</strong> ${enhancedData.actual_rows}</p>
+                         <p><strong>Accuracy:</strong> ${(enhancedData.row_accuracy * 100).toFixed(1)}% off</p>` : ''}
+                    ${enhancedData.io_reads > 0 ? `<p><strong>I/O Reads:</strong> ${enhancedData.io_reads}</p>` : ''}
+                    ${enhancedData.cpu_time > 0 ? `<p><strong>CPU Time:</strong> ${enhancedData.cpu_time}ms</p>` : ''}
+                    ${enhancedData.elapsed_time > 0 ? `<p><strong>Elapsed Time:</strong> ${enhancedData.elapsed_time}ms</p>` : ''}
+                    ${enhancedData.warnings.length > 0 ? 
+                        `<p><strong>⚠️ Warnings:</strong></p><ul style="margin: 5px 0; padding-left: 20px;">
+                            ${enhancedData.warnings.map(w => `<li>${w}</li>`).join('')}
+                        </ul>` : ''}
+                </div>
+            </div>
+        `;
+        
+        // Show modal or tooltip with details
+        const modal = document.createElement('div');
+        modal.style.cssText = `
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+            background: rgba(0,0,0,0.5); display: flex; align-items: center; 
+            justify-content: center; z-index: 10000;
+        `;
+        modal.innerHTML = details;
+        modal.onclick = () => modal.remove();
+        document.body.appendChild(modal);
+    });
+    
+    // --- Legend ---
+    const legendData = [
+        {label: 'Join', shape: 'rect', color: '#f59e0b'},
+        {label: 'Sort', shape: 'diamond', color: '#6366f1'},
+        {label: 'Scan', shape: 'ellipse', color: '#10b981'},
+        {label: 'Aggregate', shape: 'hex', color: '#a21caf'},
+        {label: 'Seek', shape: 'ellipse', color: '#0ea5e9'},
+        {label: 'Hash', shape: 'rect', color: '#f43f5e'},
+        {label: 'Filter', shape: 'triangle', color: '#fbbf24'},
+        {label: 'Other', shape: 'circle', color: '#d1d5db'}
+    ];
+    const legend = d3.select(container).select("svg")
+        .append("g")
+        .attr("class", "legend")
+        .attr("transform", `translate(40, 40)`);
+    legend.selectAll(".legend-shape")
+        .data(legendData)
+        .enter().append("g")
+        .attr("class", "legend-shape")
+        .attr("transform", (d, i) => `translate(0,${i * 32})`)
+        .each(function(d) {
+            const g = d3.select(this);
+            const r = 14;
+            if (d.shape === 'rect') {
+                g.append('rect').attr('x', -r).attr('y', -r).attr('width', r*2).attr('height', r*2).attr('rx', 6).attr('fill', d.color).attr('stroke', '#1f2937').attr('stroke-width', 2);
+            } else if (d.shape === 'diamond') {
+                g.append('polygon').attr('points', `0,-${r} ${r},0 0,${r} -${r},0`).attr('fill', d.color).attr('stroke', '#1f2937').attr('stroke-width', 2);
+            } else if (d.shape === 'ellipse') {
+                g.append('ellipse').attr('cx', 0).attr('cy', 0).attr('rx', r*1.2).attr('ry', r*0.8).attr('fill', d.color).attr('stroke', '#1f2937').attr('stroke-width', 2);
+            } else if (d.shape === 'hex') {
+                const hexPoints = Array.from({length: 6}, (_, i) => {
+                    const angle = Math.PI / 3 * i;
+                    return [r * Math.cos(angle), r * Math.sin(angle)];
+                });
+                g.append('polygon').attr('points', hexPoints.map(p => p.join(",")).join(' ')).attr('fill', d.color).attr('stroke', '#1f2937').attr('stroke-width', 2);
+            } else if (d.shape === 'triangle') {
+                g.append('polygon').attr('points', `0,-${r} ${r},${r} -${r},${r}`).attr('fill', d.color).attr('stroke', '#1f2937').attr('stroke-width', 2);
+            } else {
+                g.append('circle').attr('r', r).attr('fill', d.color).attr('stroke', '#1f2937').attr('stroke-width', 2);
+            }
+            g.append('text').attr('x', 28).attr('y', 6).attr('font-size', '1em').text(d.label);
         });
+    // Cost color gradient legend
+    const gradLegend = d3.select(container).select("svg")
+        .append("g")
+        .attr("class", "cost-legend")
+        .attr("transform", `translate(40, ${legendData.length * 32 + 60})`);
+    gradLegend.append('text').attr('x', 0).attr('y', 0).attr('font-size', '1em').text('Cost Gradient:');
+    const grad = gradLegend.append('defs').append('linearGradient')
+        .attr('id', 'cost-gradient')
+        .attr('x1', '0%').attr('x2', '100%').attr('y1', '0%').attr('y2', '0%');
+    grad.append('stop').attr('offset', '0%').attr('stop-color', '#10b981');
+    grad.append('stop').attr('offset', '50%').attr('stop-color', '#f59e0b');
+    grad.append('stop').attr('offset', '100%').attr('stop-color', '#ef4444');
+    gradLegend.append('rect')
+        .attr('x', 0).attr('y', 10)
+        .attr('width', 120)
+        .attr('height', 16)
+        .attr('fill', 'url(#cost-gradient)');
+    gradLegend.append('text').attr('x', 0).attr('y', 38).attr('font-size', '0.9em').text('Low');
+    gradLegend.append('text').attr('x', 100).attr('y', 38).attr('font-size', '0.9em').text('High');
+    
+    // --- Performance Summary ---
+    const summary = document.createElement('div');
+    summary.style.marginTop = '20px';
+    summary.style.padding = '15px';
+    summary.style.background = 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)';
+    summary.style.borderRadius = '10px';
+    summary.style.border = '2px solid #cbd5e1';
+    summary.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
+    summary.innerHTML = `
+        <h6 style="margin:0 0 15px 0;color:#1f2937;font-weight:700;text-align:center;font-size:16px;">📈 Performance Summary</h6>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:15px;">
+            <div style="font-size:13px;padding:8px;background:rgba(59,130,246,0.1);border-radius:6px;border-left:4px solid #3b82f6;"><strong>💰 Max Cost:</strong> ${maxCost.toFixed(2)}</div>
+            <div style="font-size:13px;padding:8px;background:rgba(16,185,129,0.1);border-radius:6px;border-left:4px solid #10b981;"><strong>⏱️ Max Time:</strong> ${maxTime.toFixed(2)}ms</div>
+            <div style="font-size:13px;padding:8px;background:rgba(245,158,11,0.1);border-radius:6px;border-left:4px solid #f59e0b;"><strong>💾 Max I/O:</strong> ${maxBufferReads.toLocaleString()} reads</div>
+            <div style="font-size:13px;padding:8px;background:rgba(239,68,68,0.1);border-radius:6px;border-left:4px solid #ef4444;"><strong>🔥 Hotspots:</strong> ${maxCostNodes.length} identified</div>
+        </div>
+    `;
+    container.appendChild(summary);
 
-    controls.append("button")
-        .text("📊 Toggle Metrics")
-        .style("margin", "0 8px")
-        .style("padding", "8px 16px")
-        .style("background", "linear-gradient(135deg, #10b981 0%, #059669 100%)")
-        .style("color", "white")
-        .style("border", "none")
-        .style("border-radius", "6px")
-        .style("font-weight", "600")
-        .style("cursor", "pointer")
-        .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)")
-        .on("mouseover", function() {
-            d3.select(this).style("transform", "translateY(-1px)").style("box-shadow", "0 4px 8px rgba(0,0,0,0.2)");
-        })
-        .on("mouseout", function() {
-            d3.select(this).style("transform", "translateY(0)").style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)");
-        })
-        .on("click", () => {
-            const metrics = d3.selectAll(".metrics");
-            const isVisible = metrics.style("display") !== "none";
-            metrics.style("display", isVisible ? "none" : "block");
-        });
-
-    controls.append("button")
-        .text("⚠️ Toggle Indicators")
-        .style("margin", "0 8px")
-        .style("padding", "8px 16px")
-        .style("background", "linear-gradient(135deg, #f59e0b 0%, #d97706 100%)")
-        .style("color", "white")
-        .style("border", "none")
-        .style("border-radius", "6px")
-        .style("font-weight", "600")
-        .style("cursor", "pointer")
-        .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)")
-        .on("mouseover", function() {
-            d3.select(this).style("transform", "translateY(-1px)").style("box-shadow", "0 4px 8px rgba(0,0,0,0.2)");
-        })
-        .on("mouseout", function() {
-            d3.select(this).style("transform", "translateY(0)").style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)");
-        })
-        .on("click", () => {
-            const indicators = d3.selectAll(".performance-indicators");
-            const isVisible = indicators.style("display") !== "none";
-            indicators.style("display", isVisible ? "none" : "block");
-        });
-
-    controls.append("button")
-        .text("📷 Export PNG")
-        .style("margin", "0 8px")
-        .style("padding", "8px 16px")
-        .style("background", "linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)")
-        .style("color", "white")
-        .style("border", "none")
-        .style("border-radius", "6px")
-        .style("font-weight", "600")
-        .style("cursor", "pointer")
-        .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)")
-        .on("mouseover", function() {
-            d3.select(this).style("transform", "translateY(-1px)").style("box-shadow", "0 4px 8px rgba(0,0,0,0.2)");
-        })
-        .on("mouseout", function() {
-            d3.select(this).style("transform", "translateY(0)").style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)");
-        })
-        .on("click", () => exportToPNG(container.querySelector("svg")));
-
-    controls.append("button")
-        .text("🖼️ Export SVG")
-        .style("margin", "0 8px")
-        .style("padding", "8px 16px")
-        .style("background", "linear-gradient(135deg, #ec4899 0%, #db2777 100%)")
-        .style("color", "white")
-        .style("border", "none")
-        .style("border-radius", "6px")
-        .style("font-weight", "600")
-        .style("cursor", "pointer")
-        .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)")
-        .on("mouseover", function() {
-            d3.select(this).style("transform", "translateY(-1px)").style("box-shadow", "0 4px 8px rgba(0,0,0,0.2)");
-        })
-        .on("mouseout", function() {
-            d3.select(this).style("transform", "translateY(0)").style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)");
-        })
-        .on("click", () => exportToSVG(container.querySelector("svg")));
-
-    // Add performance summary with enhanced styling
-    const summary = d3.select(container).append("div")
-        .style("margin-top", "20px")
-        .style("padding", "15px")
-        .style("background", "linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)")
-        .style("border-radius", "10px")
-        .style("border", "2px solid #cbd5e1")
-        .style("box-shadow", "0 4px 6px rgba(0,0,0,0.1)");
-
-    summary.append("h6")
-        .text("📈 Performance Summary")
-        .style("margin", "0 0 15px 0")
-        .style("color", "#1f2937")
-        .style("font-weight", "700")
-        .style("text-align", "center")
-        .style("font-size", "16px");
-
-    const summaryStats = summary.append("div")
-        .style("display", "grid")
-        .style("grid-template-columns", "repeat(auto-fit, minmax(180px, 1fr))")
-        .style("gap", "15px");
-
-    summaryStats.append("div")
-        .html(`<strong>💰 Max Cost:</strong> ${maxCost.toFixed(2)}`)
-        .style("font-size", "13px")
-        .style("padding", "8px")
-        .style("background", "rgba(59, 130, 246, 0.1)")
-        .style("border-radius", "6px")
-        .style("border-left", "4px solid #3b82f6");
-
-    summaryStats.append("div")
-        .html(`<strong>⏱️ Max Time:</strong> ${maxTime.toFixed(2)}ms`)
-        .style("font-size", "13px")
-        .style("padding", "8px")
-        .style("background", "rgba(16, 185, 129, 0.1)")
-        .style("border-radius", "6px")
-        .style("border-left", "4px solid #10b981");
-
-    summaryStats.append("div")
-        .html(`<strong>💾 Max I/O:</strong> ${maxBufferReads.toLocaleString()} reads`)
-        .style("font-size", "13px")
-        .style("padding", "8px")
-        .style("background", "rgba(245, 158, 11, 0.1)")
-        .style("border-radius", "6px")
-        .style("border-left", "4px solid #f59e0b");
-
-    summaryStats.append("div")
-        .html(`<strong>🔥 Hotspots:</strong> ${performanceHotspots.length} identified`)
-        .style("font-size", "13px")
-        .style("padding", "8px")
-        .style("background", "rgba(239, 68, 68, 0.1)")
-        .style("border-radius", "6px")
-        .style("border-left", "4px solid #ef4444");
-
+    // --- Export Functions ---
     function exportToPNG(svgNode) {
         // Get the full SVG dimensions including all content
-        const svgRect = svgNode.getBoundingClientRect();
-        const containerRect = container.getBoundingClientRect();
-        
-        // Calculate the actual content bounds
         const bbox = svgNode.getBBox();
+        const extraTop = 60; // extra margin for legend/top
+        const extraBottom = 200; // extra margin for performance summary
         const fullWidth = bbox.width + margin.left + margin.right;
-        const fullHeight = bbox.height + margin.top + margin.bottom;
+        const fullHeight = bbox.height + margin.top + margin.bottom + extraTop + extraBottom;
         
         // Create a temporary SVG with the full dimensions
         const tempSvg = svgNode.cloneNode(true);
         tempSvg.setAttribute('width', fullWidth);
         tempSvg.setAttribute('height', fullHeight);
         tempSvg.setAttribute('viewBox', `0 0 ${fullWidth} ${fullHeight}`);
+        tempSvg.setAttribute('style', `background:white`);
+        
+        // Move all content down by extraTop
+        const g = tempSvg.querySelector('g');
+        if (g) {
+            const oldTransform = g.getAttribute('transform') || '';
+            g.setAttribute('transform', `translate(${margin.left},${margin.top + extraTop})`);
+        }
         
         const serializer = new XMLSerializer();
         const svgStr = serializer.serializeToString(tempSvg);
@@ -1148,24 +1396,34 @@ function renderD3Tree(treeData, container) {
             const png = canvas.toDataURL("image/png");
             const a = document.createElement("a");
             a.href = png;
-            a.download = "explain_plan.png";
+            a.download = "sql_execution_plan.png";
             a.click();
         };
         
         img.src = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(svgStr)));
     }
-
+    
     function exportToSVG(svgNode) {
         // Get the full SVG dimensions including all content
         const bbox = svgNode.getBBox();
+        const extraTop = 60;
+        const extraBottom = 200; // extra margin for performance summary
         const fullWidth = bbox.width + margin.left + margin.right;
-        const fullHeight = bbox.height + margin.top + margin.bottom;
+        const fullHeight = bbox.height + margin.top + margin.bottom + extraTop + extraBottom;
         
         // Create a temporary SVG with the full dimensions
         const tempSvg = svgNode.cloneNode(true);
         tempSvg.setAttribute('width', fullWidth);
         tempSvg.setAttribute('height', fullHeight);
         tempSvg.setAttribute('viewBox', `0 0 ${fullWidth} ${fullHeight}`);
+        tempSvg.setAttribute('style', `background:white`);
+        
+        // Move all content down by extraTop
+        const g = tempSvg.querySelector('g');
+        if (g) {
+            const oldTransform = g.getAttribute('transform') || '';
+            g.setAttribute('transform', `translate(${margin.left},${margin.top + extraTop})`);
+        }
         
         const serializer = new XMLSerializer();
         const svgStr = serializer.serializeToString(tempSvg);
@@ -1173,7 +1431,7 @@ function renderD3Tree(treeData, container) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = "explain_plan.svg";
+        a.download = "sql_execution_plan.svg";
         a.click();
         URL.revokeObjectURL(url);
     }

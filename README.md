@@ -27,9 +27,9 @@ A comprehensive SQL performance optimization tool with advanced execution plan v
 
 ## 🛠️ Installation
 
-```bash
+   ```bash
 # Clone the repository
-git clone <repository-url>
+   git clone <repository-url>
 cd SQL-Performance-Assistant
 
 # Install dependencies
