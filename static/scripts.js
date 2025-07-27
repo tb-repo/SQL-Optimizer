@@ -679,503 +679,1417 @@ function generateExplainVisualization() {
     });
 }
 
-function renderD3Tree(treeData, container) {
-    // Set dimensions with much more generous spacing for text
-    const margin = {top: 30, right: 300, bottom: 50, left: 300}; // Dramatically increased margins for text space
-    const width = Math.max(container.clientWidth - margin.right - margin.left, 800); // Ensure minimum width
-    const height = 800 - margin.top - margin.bottom;
-
-    // Clear container
-    container.innerHTML = '';
-
-    // Create SVG with much larger dimensions to accommodate text
-    const svg = d3.select(container).append("svg")
-        .attr("width", width + margin.right + margin.left)
-        .attr("height", height + margin.top + margin.bottom)
-        .style("overflow", "visible") // Allow content to overflow
-        .append("g")
-        .attr("transform", `translate(${margin.left},${margin.top})`);
-
-    // Add zoom behavior
-    const zoom = d3.zoom()
-        .scaleExtent([0.5, 3])
-        .on("zoom", (event) => {
-            svg.attr("transform", event.transform);
-        });
-
-    d3.select(container).select("svg").call(zoom);
-
-    // Use the tree data directly from backend (actual execution flow)
-    const root = d3.hierarchy(treeData, d => d.children);
+        function renderDetailedTree(treeData, container) {
+            // Calculate plan complexity to adjust spacing dynamically
+            const planComplexity = calculatePlanComplexity(treeData);
+            
+            // Set dimensions with dynamic spacing based on complexity
+            const baseMargin = {top: 80, right: 450, bottom: 120, left: 450};
+            const complexityMultiplier = Math.max(1, planComplexity / 15);
+            
+            const margin = {
+                top: baseMargin.top * complexityMultiplier,
+                right: baseMargin.right * complexityMultiplier,
+                bottom: baseMargin.bottom * complexityMultiplier,
+                left: baseMargin.left * complexityMultiplier
+            };
     
-    // Calculate performance metrics for color coding
-    let maxCost = 0;
-    let maxTime = 0;
-    let maxBufferReads = 0;
-    let performanceHotspots = [];
-    
-    root.each(d => {
-        if (d.data.cost > maxCost) maxCost = d.data.cost;
-        if (d.data.time > maxTime) maxTime = d.data.time;
-        if (d.data.buffers && d.data.buffers.shared_read > maxBufferReads) {
-            maxBufferReads = d.data.buffers.shared_read;
+            const width = Math.max(container.clientWidth - margin.right - margin.left, 1400);
+            const height = Math.max(1200 - margin.top - margin.bottom, 800);
+
+            // Clear container
+            container.innerHTML = '';
+
+            // Create main visualization container with proper containment
+            const vizContainer = d3.select(container).append("div")
+                .style("position", "relative")
+                .style("width", "100%")
+                .style("height", "100%")
+                .style("border-radius", "8px")
+                .style("background", "#ffffff")
+                .style("border", "2px solid #e5e7eb")
+                .style("overflow", "hidden"); // FIX: Add overflow hidden to prevent dragging outside
+
+            // Create SVG with much larger dimensions to accommodate text
+            const svg = vizContainer.append("svg")
+                .attr("width", width + margin.right + margin.left)
+                .attr("height", height + margin.top + margin.bottom)
+                .style("overflow", "visible")
+                .append("g")
+                .attr("transform", `translate(${margin.left},${margin.top})`);
+
+            // Add zoom behavior with proper containment - FIX: Add translateExtent to constrain dragging
+            const zoom = d3.zoom()
+                .scaleExtent([0.3, 4])
+                .translateExtent([[0, 0], [width + margin.right + margin.left, height + margin.top + margin.bottom]]) // FIX: Constrain dragging
+                .on("zoom", (event) => {
+                    svg.attr("transform", event.transform);
+                });
+
+            vizContainer.select("svg").call(zoom);
+
+            // Use the tree data directly from backend (actual execution flow)
+            const root = d3.hierarchy(treeData, d => d.children);
+            
+            // Calculate performance metrics for color coding
+            let maxCost = 0;
+            let maxTime = 0;
+            let maxBufferReads = 0;
+            let performanceHotspots = [];
+            
+            // Calculate performance metrics for color coding
+            root.each(d => {
+                if (d.data.cost > maxCost) maxCost = d.data.cost;
+                if (d.data.time > maxTime) maxTime = d.data.time;
+                if (d.data.buffers && d.data.buffers.shared_read > maxBufferReads) {
+                    maxBufferReads = d.data.buffers.shared_read;
+                }
+            });
+            
+            // Ensure we have minimum values for color scale calculation
+            if (maxCost === 0) maxCost = 1;
+            if (maxTime === 0) maxTime = 1;
+            if (maxBufferReads === 0) maxBufferReads = 1;
+            
+            // Identify performance hotspots (top 20% by cost)
+            const allNodes = root.descendants().filter(d => d.data.cost > 0);
+            allNodes.sort((a, b) => b.data.cost - a.data.cost);
+            const hotspotCount = Math.max(1, Math.floor(allNodes.length * 0.2));
+            performanceHotspots = allNodes.slice(0, hotspotCount).map(d => d.data.cost);
+            
+            // Enhanced color scale with more vibrant colors
+            const colorDomain = Math.max(maxCost, maxTime * 100, maxBufferReads * 10);
+
+            const colorScale = d3.scaleLinear()
+                .domain([0, colorDomain])
+                .range(["#10b981", "#f59e0b", "#ef4444"]); // Green -> Orange -> Red
+
+            // Dynamic separation based on plan complexity
+            const baseSeparation = 3.5;
+            const separationMultiplier = Math.max(1, planComplexity / 12);
+            
+            const tree = d3.tree().size([width, height]).separation((a, b) => {
+                // Balanced separation between siblings to prevent text overlap while maintaining proximity
+                const separation = baseSeparation * separationMultiplier;
+                return (a.parent === b.parent ? separation : separation * 1.2);
+            });
+
+            // Assigns the data to a hierarchy using parent-child relationships
+            const treeData2 = tree(root);
+
+            // CENTER THE TREE BY DEFAULT
+            const treeBounds = treeData2.descendants().reduce((bounds, d) => {
+                bounds.x0 = Math.min(bounds.x0, d.x);
+                bounds.x1 = Math.max(bounds.x1, d.x);
+                bounds.y0 = Math.min(bounds.y0, d.y);
+                bounds.y1 = Math.max(bounds.y1, d.y);
+                return bounds;
+            }, {x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity});
+
+            // Calculate centering transform
+            const treeWidth = treeBounds.x1 - treeBounds.x0;
+            const treeHeight = treeBounds.y1 - treeBounds.y0;
+            const centerX = (width - treeWidth) / 2 - treeBounds.x0;
+            const centerY = (height - treeHeight) / 2 - treeBounds.y0;
+
+            // Apply centering transform to all nodes
+            treeData2.descendants().forEach(d => {
+                d.x += centerX;
+                d.y += centerY;
+            });
+
+            // Compute the new tree layout
+            const nodes = treeData2.descendants();
+            const links = treeData2.links();
+
+            // Declare the links with enhanced styling
+            const link = svg.selectAll(".link")
+                .data(links)
+                .enter().append("path")
+                .attr("class", "link")
+                .attr("d", d3.linkVertical()
+                    .x(d => d.x)
+                    .y(d => d.y))
+                .style("fill", "none")
+                .style("stroke", "#3b82f6")
+                .style("stroke-width", 2.5)
+                .style("stroke-opacity", 0.8)
+                .style("z-index", "1");
+
+            // Declare the nodes
+            const node = svg.selectAll(".node")
+                .data(nodes)
+                .enter().append("g")
+                .attr("class", "node")
+                .attr("transform", d => `translate(${d.x},${d.y})`)
+                .style("z-index", "10");
+
+            // FIX: Add function to detect scan operations that might need indexes
+            function isScanOperation(operation) {
+                const scanKeywords = [
+                    'TABLE ACCESS FULL', 'SEQUENTIAL SCAN', 'TABLE SCAN', 
+                    'INDEX SCAN', 'BITMAP INDEX SCAN', 'INDEX FAST FULL SCAN',
+                    'CLUSTERED INDEX SCAN', 'NONCLUSTERED INDEX SCAN',
+                    'TABLE ACCESS BY INDEX ROWID', 'INDEX RANGE SCAN'
+                ];
+                return scanKeywords.some(keyword => 
+                    operation.toUpperCase().includes(keyword.toUpperCase())
+                );
+            }
+
+            // FIX: Add function to detect full table scans specifically
+            function isFullTableScan(operation) {
+                const fullScanKeywords = [
+                    'TABLE ACCESS FULL', 'SEQUENTIAL SCAN', 'TABLE SCAN'
+                ];
+                return fullScanKeywords.some(keyword => 
+                    operation.toUpperCase().includes(keyword.toUpperCase())
+                );
+            }
+
+            // Add the circles for the nodes with enhanced styling and sizing
+            node.append("circle")
+                .attr("r", d => {
+                    // Larger circles for performance hotspots and more dynamic sizing
+                    const baseRadius = 22;
+                    if (performanceHotspots.includes(d.data.cost)) {
+                        return baseRadius + 10;
+                    }
+                    if (d.data.cost > maxCost * 0.5) {
+                        return baseRadius + 6;
+                    }
+                    return baseRadius;
+                })
+                .style("fill", d => {
+                    // Enhanced multi-factor color coding
+                    const costFactor = d.data.cost / maxCost;
+                    const timeFactor = d.data.time / maxTime;
+                    const bufferFactor = d.data.buffers && d.data.buffers.shared_read ? d.data.buffers.shared_read / maxBufferReads : 0;
+                    
+                    // Ensure we have valid factors
+                    const validCostFactor = isNaN(costFactor) ? 0 : costFactor;
+                    const validTimeFactor = isNaN(timeFactor) ? 0 : timeFactor;
+                    const validBufferFactor = isNaN(bufferFactor) ? 0 : bufferFactor;
+                    
+                    const totalFactor = Math.max(validCostFactor, validTimeFactor, validBufferFactor);
+                    const colorValue = colorScale(totalFactor * colorDomain);
+                    
+                    return colorValue;
+                })
+                .style("stroke", d => {
+                    // FIX: Add special highlighting for scan operations
+                    if (isFullTableScan(d.data.operation)) {
+                        return "#dc2626"; // Red border for full table scans
+                    }
+                    if (isScanOperation(d.data.operation)) {
+                        return "#f59e0b"; // Orange border for other scans
+                    }
+                    // Enhanced stroke styling
+                    if (performanceHotspots.includes(d.data.cost)) {
+                        return "#1f2937";
+                    }
+                    return d.data.cost === maxCost ? "#1f2937" : "#ffffff";
+                })
+                .style("stroke-width", d => {
+                    // FIX: Thicker border for scan operations
+                    if (isScanOperation(d.data.operation)) {
+                        return 4;
+                    }
+                    if (performanceHotspots.includes(d.data.cost)) {
+                        return 4;
+                    }
+                    return d.data.cost === maxCost ? 3 : 2.5;
+                })
+                .style("stroke-dasharray", d => {
+                    // FIX: Special pattern for full table scans
+                    if (isFullTableScan(d.data.operation)) {
+                        return "8,4"; // Dashed pattern for full scans
+                    }
+                    // Dashed border for I/O heavy operations
+                    if (d.data.buffers && d.data.buffers.shared_read > 0) {
+                        return "6,6";
+                    }
+                    return "none";
+                })
+                .style("filter", d => {
+                    // FIX: Add glow effect for scan operations
+                    if (isFullTableScan(d.data.operation)) {
+                        return "drop-shadow(0 0 8px rgba(220, 38, 38, 0.6))"; // Red glow for full scans
+                    }
+                    if (isScanOperation(d.data.operation)) {
+                        return "drop-shadow(0 0 6px rgba(245, 158, 11, 0.5))"; // Orange glow for scans
+                    }
+                    // Add shadow for hotspots
+                    if (performanceHotspots.includes(d.data.cost)) {
+                        return "drop-shadow(0 4px 8px rgba(0,0,0,0.3))";
+                    }
+                    return "drop-shadow(0 2px 4px rgba(0,0,0,0.1))";
+                })
+                .style("z-index", "5");
+
+            // IMPROVED function to calculate optimal text position with better branch handling
+            function calculateTextPosition(d, textType) {
+                const baseOffset = 60 * complexityMultiplier; // Reduced for better association
+                const verticalSpacing = {
+                    'operation': 0,
+                    'metrics': 2.0 * complexityMultiplier, // Reduced spacing
+                    'indicators': 4.0 * complexityMultiplier // Reduced spacing
+                };
+                
+                let xOffset = baseOffset;
+                let yOffset = verticalSpacing[textType] || 0;
+                
+                // FIX: IMPROVED side determination for better branch clarity
+                let isLeftSide = false;
+                
+                // For nodes with siblings, place text on opposite sides
+                if (d.parent && d.parent.children) {
+                    const siblings = d.parent.children;
+                    const siblingIndex = siblings.indexOf(d);
+                    const totalSiblings = siblings.length;
+                    
+                    // FIX: Better logic for branching nodes - use opposite sides consistently
+                    if (totalSiblings > 1) {
+                        // For even number of siblings: left, right, left, right...
+                        // For odd number: left, right, center, left, right...
+                        if (totalSiblings === 2) {
+                            // Two siblings: first on left, second on right
+                            isLeftSide = siblingIndex === 0;
+                        } else if (totalSiblings === 3) {
+                            // Three siblings: left, center, right
+                            if (siblingIndex === 0) isLeftSide = true;
+                            else if (siblingIndex === 1) {
+                                // Center sibling: use position-based logic
+                                isLeftSide = d.x < width / 2;
+                            } else isLeftSide = false;
+                        } else {
+                            // More than 3 siblings: alternate sides
+                            isLeftSide = siblingIndex % 2 === 0;
+                        }
+                    } else {
+                        // Single child: use position-based logic
+                        isLeftSide = d.x < width / 2;
+                    }
+                } else {
+                    // Root or nodes without siblings: use position-based logic
+                    isLeftSide = d.x < width / 2;
+                }
+                
+                // Adjust for depth to create better visual hierarchy
+                if (d.depth > 1) {
+                    isLeftSide = !isLeftSide; // Invert for deeper levels
+                }
+                
+                if (isLeftSide) {
+                    xOffset = -xOffset;
+                }
+                
+                // Reduced randomness for more predictable positioning
+                const randomOffset = (Math.random() - 0.5) * 2; // Reduced randomness
+                yOffset += randomOffset;
+                
+                // Improved depth offset with better spacing
+                const depthOffset = d.depth * 1.0; // Reduced for tighter grouping
+                yOffset += depthOffset;
+                
+                // Enhanced sibling offset to prevent overlaps
+                if (d.parent && d.parent.children) {
+                    const siblingIndex = d.parent.children.indexOf(d);
+                    const totalSiblings = d.parent.children.length;
+                    if (totalSiblings > 1) {
+                        const siblingOffset = (siblingIndex - (totalSiblings - 1) / 2) * 0.8; // Reduced for closer positioning
+                        yOffset += siblingOffset;
+                    }
+                }
+                
+                // Additional offset based on text type to prevent overlap between operation and metrics
+                if (textType === 'metrics') {
+                    yOffset += 1.0; // Small additional offset for metrics
+                }
+                
+                return {
+                    x: xOffset,
+                    y: yOffset,
+                    anchor: isLeftSide ? "end" : "start"
+                };
+            }
+
+            // Add connecting lines from nodes to operation labels
+            node.append("line")
+                .attr("class", "text-connector")
+                .attr("x1", 0)
+                .attr("y1", 0)
+                .attr("x2", d => calculateTextPosition(d, 'operation').x)
+                .attr("y2", d => calculateTextPosition(d, 'operation').y * 12) // Convert em to px
+                .style("stroke", "#374151")
+                .style("stroke-width", "2px")
+                .style("stroke-dasharray", "2,2")
+                .style("opacity", "0.8")
+                .style("z-index", "10")
+                .style("pointer-events", "none");
+
+            // Add labels for the nodes with improved spacing and collision avoidance
+            node.append("text")
+                .attr("class", "operation-label")
+                .attr("dy", d => calculateTextPosition(d, 'operation').y + "em")
+                .attr("x", d => calculateTextPosition(d, 'operation').x)
+                .style("text-anchor", d => calculateTextPosition(d, 'operation').anchor)
+                .text(d => {
+                    // Truncate long operation names to prevent overlap
+                    const operation = d.data.operation;
+                    return operation.length > 20 ? operation.substring(0, 18) + "..." : operation;
+                })
+                .style("font-size", "12px")
+                .style("font-weight", "600")
+                .style("fill", "#1f2937")
+                .style("text-shadow", "0 2px 4px rgba(255,255,255,0.9)")
+                .style("letter-spacing", "0.2px")
+                .style("dominant-baseline", "middle")
+                .style("z-index", "20")
+                .style("pointer-events", "none");
+
+            // Add enhanced metrics text with better spacing - ALWAYS SHOW METRICS
+            node.append("text")
+                .attr("class", "metrics")
+                .attr("dy", d => calculateTextPosition(d, 'metrics').y + "em")
+                .attr("x", d => calculateTextPosition(d, 'metrics').x)
+                .style("text-anchor", d => calculateTextPosition(d, 'metrics').anchor)
+                .text(d => {
+                    let metrics = [];
+                    // Always show cost if available (for all database engines)
+                    if (d.data.cost !== undefined && d.data.cost !== null) {
+                        metrics.push(`C:${d.data.cost.toFixed(1)}`);
+                    }
+                    // Always show rows if available (for all database engines)
+                    if (d.data.rows !== undefined && d.data.rows !== null) {
+                        metrics.push(`R:${d.data.rows.toLocaleString()}`);
+                    }
+                    // Always show time if available (for all database engines)
+                    if (d.data.time !== undefined && d.data.time !== null && d.data.time > 0) {
+                        metrics.push(`T:${d.data.time.toFixed(1)}ms`);
+                    }
+                    // Show buffers if available (for all database engines)
+                    if (d.data.buffers && d.data.buffers.shared_read > 0) {
+                        metrics.push(`IO:${d.data.buffers.shared_read}`);
+                    }
+                    // Show bytes if available (Oracle specific)
+                    if (d.data.bytes !== undefined && d.data.bytes !== null && d.data.bytes > 0) {
+                        metrics.push(`B:${d.data.bytes.toLocaleString()}`);
+                    }
+                    // If no metrics available, show a placeholder
+                    if (metrics.length === 0) {
+                        metrics.push("No metrics");
+                    }
+                    
+                    const metricsText = metrics.join(" | ");
+                    // Truncate very long metric strings to prevent overlap
+                    return metricsText.length > 40 ? metricsText.substring(0, 37) + "..." : metricsText;
+                })
+                .style("font-size", "10px")
+                .style("fill", "#6b7280")
+                .style("font-weight", "500")
+                .style("text-shadow", "0 2px 4px rgba(255,255,255,0.9)")
+                .style("dominant-baseline", "middle")
+                .style("overflow", "visible")
+                .style("white-space", "normal")
+                .style("z-index", "15")
+                .style("pointer-events", "none");
+
+            // Add performance indicators with improved spacing and positioning
+            node.append("text")
+                .attr("class", "performance-indicators")
+                .attr("dy", d => calculateTextPosition(d, 'indicators').y + "em")
+                .attr("x", d => calculateTextPosition(d, 'indicators').x)
+                .style("text-anchor", d => calculateTextPosition(d, 'indicators').anchor)
+                .text(d => {
+                    let indicators = [];
+                    if (performanceHotspots.includes(d.data.cost)) {
+                        indicators.push("🔥");
+                    }
+                    if (d.data.buffers && d.data.buffers.shared_read > maxBufferReads * 0.5) {
+                        indicators.push("💾");
+                    }
+                    if (d.data.time > maxTime * 0.5) {
+                        indicators.push("⏱️");
+                    }
+                    // FIX: Add scan operation indicators
+                    if (isFullTableScan(d.data.operation)) {
+                        indicators.push("📋"); // Full table scan indicator
+                    } else if (isScanOperation(d.data.operation)) {
+                        indicators.push("🔍"); // General scan indicator
+                    }
+                    const indicatorText = indicators.join("  "); // Double space between indicators
+                    // Only show indicators if there are any to reduce clutter
+                    return indicatorText;
+                })
+                .style("font-size", "11px") // Slightly larger for better visibility
+                .style("fill", "#dc2626")
+                .style("font-weight", "bold")
+                .style("text-shadow", "0 2px 4px rgba(255,255,255,0.9)")
+                .style("dominant-baseline", "middle")
+                .style("z-index", "16") // Higher z-index to ensure visibility
+                .style("pointer-events", "none");
+
+            // Add tooltips with detailed information
+            node.append("title")
+                .text(d => {
+                    let tooltip = `Operation: ${d.data.operation}\n`;
+                    tooltip += `Cost: ${d.data.cost.toFixed(2)}\n`;
+                    tooltip += `Rows: ${d.data.rows.toLocaleString()}\n`;
+                    if (d.data.time > 0) tooltip += `Time: ${d.data.time.toFixed(2)}ms\n`;
+                    if (d.data.buffers) {
+                        if (d.data.buffers.shared_hit) tooltip += `Buffer Hits: ${d.data.buffers.shared_hit}\n`;
+                        if (d.data.buffers.shared_read) tooltip += `Buffer Reads: ${d.data.buffers.shared_read}\n`;
+                        if (d.data.buffers.shared_written) tooltip += `Buffer Writes: ${d.data.buffers.shared_written}\n`;
+                    }
+                    if (d.data.filter) tooltip += `Filter: ${d.data.filter}\n`;
+                    if (d.data.join_condition) tooltip += `Join: ${d.data.join_condition}\n`;
+                    if (performanceHotspots.includes(d.data.cost)) tooltip += `\n🔥 Performance Hotspot`;
+                    // FIX: Add scan operation warnings
+                    if (isFullTableScan(d.data.operation)) {
+                        tooltip += `\n📋 Full Table Scan - Consider adding indexes for better performance`;
+                    } else if (isScanOperation(d.data.operation)) {
+                        tooltip += `\n🔍 Scan Operation - Review index usage`;
+                    }
+                    return tooltip;
+                });
+
+            // Create legend in a separate container outside the main visualization
+            const legendContainer = d3.select(container).append("div")
+                .style("position", "absolute")
+                .style("bottom", "80px") // Moved to bottom to avoid blocking view
+                .style("right", "20px")
+                .style("width", "280px")
+                .style("background", "rgba(255, 255, 255, 0.95)")
+                .style("border", "2px solid #e5e7eb")
+                .style("border-radius", "12px")
+                .style("padding", "15px")
+                .style("box-shadow", "0 8px 32px rgba(0, 0, 0, 0.1)")
+                .style("z-index", "100")
+                .style("backdrop-filter", "blur(10px)")
+                .style("max-height", "300px") // Limit height
+                .style("overflow-y", "auto"); // Make scrollable if needed
+
+            // Legend title
+            legendContainer.append("div")
+                .style("font-size", "16px")
+                .style("font-weight", "bold")
+                .style("color", "#1f2937")
+                .style("margin-bottom", "12px")
+                .style("text-align", "center")
+                .text("Performance Legend");
+
+            // Performance levels
+            legendContainer.append("div")
+                .style("font-size", "14px")
+                .style("font-weight", "600")
+                .style("color", "#374151")
+                .style("margin-bottom", "8px")
+                .text("Performance Levels:");
+
+            const performanceLevels = [
+                { color: "#10b981", label: "Low Cost/Time" },
+                { color: "#f59e0b", label: "Medium Cost/Time" },
+                { color: "#ef4444", label: "High Cost/Time" }
+            ];
+
+            performanceLevels.forEach((item, i) => {
+                const legendItem = legendContainer.append("div")
+                    .style("display", "flex")
+                    .style("align-items", "center")
+                    .style("margin-bottom", "6px");
+
+                legendItem.append("div")
+                    .style("width", "16px")
+                    .style("height", "16px")
+                    .style("border-radius", "50%")
+                    .style("background", item.color)
+                    .style("border", "2px solid #ffffff")
+                    .style("margin-right", "10px")
+                    .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)");
+
+                legendItem.append("span")
+                    .style("font-size", "12px")
+                    .style("color", "#374151")
+                    .text(item.label);
+            });
+
+            // Add operation type indicators
+            legendContainer.append("div")
+                .style("font-size", "14px")
+                .style("font-weight", "600")
+                .style("color", "#374151")
+                .style("margin-top", "15px")
+                .style("margin-bottom", "8px")
+                .text("Operation Types:");
+
+            const operationTypes = [
+                { pattern: "none", label: "CPU Operations" },
+                { pattern: "6,6", label: "I/O Operations" }
+            ];
+
+            operationTypes.forEach((item, i) => {
+                const legendItem = legendContainer.append("div")
+                    .style("display", "flex")
+                    .style("align-items", "center")
+                    .style("margin-bottom", "6px");
+
+                legendItem.append("div")
+                    .style("width", "16px")
+                    .style("height", "16px")
+                    .style("border-radius", "50%")
+                    .style("background", "#3b82f6")
+                    .style("border", "2px solid #ffffff")
+                    .style("border-style", item.pattern === "none" ? "solid" : "dashed")
+                    .style("margin-right", "10px")
+                    .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)");
+
+                legendItem.append("span")
+                    .style("font-size", "12px")
+                    .style("color", "#374151")
+                    .text(item.label);
+            });
+
+            // Add performance indicators section
+            legendContainer.append("div")
+                .style("font-size", "14px")
+                .style("font-weight", "600")
+                .style("color", "#374151")
+                .style("margin-top", "15px")
+                .style("margin-bottom", "8px")
+                .text("Performance Indicators:");
+
+            const indicators = [
+                { symbol: "🔥", label: "Performance Hotspot" },
+                { symbol: "💾", label: "I/O Heavy Operation" },
+                { symbol: "⏱️", label: "Slow Operation" },
+                { symbol: "📋", label: "Full Table Scan (Needs Index)" },
+                { symbol: "🔍", label: "Scan Operation (Review Index)" }
+            ];
+
+            indicators.forEach((item, i) => {
+                const legendItem = legendContainer.append("div")
+                    .style("display", "flex")
+                    .style("align-items", "center")
+                    .style("margin-bottom", "6px");
+
+                legendItem.append("span")
+                    .style("font-size", "12px")
+                    .style("color", "#dc2626")
+                    .style("font-weight", "bold")
+                    .style("margin-right", "10px")
+                    .text(item.symbol);
+
+                legendItem.append("span")
+                    .style("font-size", "12px")
+                    .style("color", "#374151")
+                    .text(item.label);
+            });
+
+            // Add visualization controls
+            addVisualizationControls(vizContainer, container);
         }
-    });
-    
-    // Identify performance hotspots (top 20% by cost)
-    const allNodes = root.descendants().filter(d => d.data.cost > 0);
-    allNodes.sort((a, b) => b.data.cost - a.data.cost);
-    const hotspotCount = Math.max(1, Math.floor(allNodes.length * 0.2));
-    performanceHotspots = allNodes.slice(0, hotspotCount).map(d => d.data.cost);
-    
-    // Enhanced color scale with more vibrant colors
-    const colorScale = d3.scaleLinear()
-        .domain([0, Math.max(maxCost, maxTime * 100, maxBufferReads * 10)])
-        .range(["#10b981", "#f59e0b", "#ef4444"]); // Green -> Orange -> Red
 
-    // Assigns the data to a hierarchy using parent-child relationships
-    // Increase separation between nodes to prevent overlap
-    const tree = d3.tree().size([width, height]).separation((a, b) => {
-        // Increase separation between siblings to prevent text overlap
-        return (a.parent === b.parent ? 2.0 : 2.5); // Increased separation
-    });
-
-    // Assigns the data to a hierarchy using parent-child relationships
-    const treeData2 = tree(root);
-
-    // Compute the new tree layout
-    const nodes = treeData2.descendants();
-    const links = treeData2.links();
-
-    // Declare the links with enhanced styling
-    const link = svg.selectAll(".link")
-        .data(links)
-        .enter().append("path")
-        .attr("class", "link")
-        .attr("d", d3.linkVertical()
-            .x(d => d.x)
-            .y(d => d.y))
-        .style("fill", "none")
-        .style("stroke", "#3b82f6")
-        .style("stroke-width", 2.5)
-        .style("stroke-opacity", 0.8);
-
-    // Declare the nodes
-    const node = svg.selectAll(".node")
-        .data(nodes)
-        .enter().append("g")
-        .attr("class", "node")
-        .attr("transform", d => `translate(${d.x},${d.y})`);
-
-    // Add the circles for the nodes with enhanced styling and sizing
-    node.append("circle")
-        .attr("r", d => {
-            // Larger circles for performance hotspots and more dynamic sizing
-            const baseRadius = 20; // Increased base radius
-            if (performanceHotspots.includes(d.data.cost)) {
-                return baseRadius + 8;
-            }
-            if (d.data.cost > maxCost * 0.5) {
-                return baseRadius + 4;
-            }
-            return baseRadius;
-        })
-        .style("fill", d => {
-            // Enhanced multi-factor color coding
-            const costFactor = d.data.cost / maxCost;
-            const timeFactor = d.data.time / maxTime;
-            const bufferFactor = d.data.buffers ? d.data.buffers.shared_read / maxBufferReads : 0;
+        // Compact visualization for complex plans (≥16 nodes)
+        function renderCompactTree(treeData, container) {
+            // Calculate plan complexity
+            const planComplexity = calculatePlanComplexity(treeData);
             
-            const totalFactor = Math.max(costFactor, timeFactor, bufferFactor);
-            return colorScale(totalFactor * Math.max(maxCost, maxTime * 100, maxBufferReads * 10));
-        })
-        .style("stroke", d => {
-            // Enhanced stroke styling
-            if (performanceHotspots.includes(d.data.cost)) {
-                return "#1f2937";
-            }
-            return d.data.cost === maxCost ? "#1f2937" : "#ffffff";
-        })
-        .style("stroke-width", d => {
-            if (performanceHotspots.includes(d.data.cost)) {
-                return 4;
-            }
-            return d.data.cost === maxCost ? 3 : 2.5;
-        })
-        .style("stroke-dasharray", d => {
-            // Dashed border for I/O heavy operations
-            if (d.data.buffers && d.data.buffers.shared_read > 0) {
-                return "6,6";
-            }
-            return "none";
-        })
-        .style("filter", d => {
-            // Add shadow for hotspots
-            if (performanceHotspots.includes(d.data.cost)) {
-                return "drop-shadow(0 4px 8px rgba(0,0,0,0.3))";
-            }
-            return "drop-shadow(0 2px 4px rgba(0,0,0,0.1))";
-        });
+            // Set dimensions optimized for complex plans
+            const baseMargin = {top: 60, right: 300, bottom: 80, left: 300};
+            const complexityMultiplier = Math.max(1, planComplexity / 25); // Less aggressive scaling
+            
+            const margin = {
+                top: baseMargin.top * complexityMultiplier,
+                right: baseMargin.right * complexityMultiplier,
+                bottom: baseMargin.bottom * complexityMultiplier,
+                left: baseMargin.left * complexityMultiplier
+            };
+    
+            const width = Math.max(container.clientWidth - margin.right - margin.left, 1600);
+            const height = Math.max(1400 - margin.top - margin.bottom, 1000);
 
-    // Function to calculate optimal text position to avoid overlap and truncation
-    function calculateTextPosition(d, textType) {
-        const baseOffset = 50; // Much larger base offset for more space
-        const verticalSpacing = {
-            'operation': 0,
-            'metrics': 2.5,
-            'indicators': 4.2
-        };
-        
-        let xOffset = baseOffset;
-        let yOffset = verticalSpacing[textType] || 0;
-        
-        // Determine if text should be on left or right side
-        const hasChildren = d.children && d.children.length > 0;
-        const isLeftSide = hasChildren;
-        
-        if (isLeftSide) {
-            xOffset = -xOffset;
+            // Clear container
+            container.innerHTML = '';
+
+            // Create main visualization container with proper containment
+            const vizContainer = d3.select(container).append("div")
+                .style("position", "relative")
+                .style("width", "100%")
+                .style("height", "100%")
+                .style("border-radius", "8px")
+                .style("background", "#ffffff")
+                .style("border", "2px solid #e5e7eb")
+                .style("overflow", "hidden"); // FIX: Add overflow hidden to prevent dragging outside
+
+            // Create SVG with larger dimensions for complex plans
+            const svg = vizContainer.append("svg")
+                .attr("width", width + margin.right + margin.left)
+                .attr("height", height + margin.top + margin.bottom)
+                .style("overflow", "visible")
+                .append("g")
+                .attr("transform", `translate(${margin.left},${margin.top})`);
+
+            // Add zoom behavior with proper containment - FIX: Add translateExtent to constrain dragging
+            const zoom = d3.zoom()
+                .scaleExtent([0.2, 5])
+                .translateExtent([[0, 0], [width + margin.right + margin.left, height + margin.top + margin.bottom]]) // FIX: Constrain dragging
+                .on("zoom", (event) => {
+                    svg.attr("transform", event.transform);
+                });
+
+            vizContainer.select("svg").call(zoom);
+
+            // Use the tree data directly from backend
+            const root = d3.hierarchy(treeData, d => d.children);
+            
+            // Calculate performance metrics for color coding
+            let maxCost = 0;
+            let maxTime = 0;
+            let maxBufferReads = 0;
+            let performanceHotspots = [];
+            
+            root.each(d => {
+                if (d.data.cost > maxCost) maxCost = d.data.cost;
+                if (d.data.time > maxTime) maxTime = d.data.time;
+                if (d.data.buffers && d.data.buffers.shared_read > maxBufferReads) {
+                    maxBufferReads = d.data.buffers.shared_read;
+                }
+            });
+            
+            // Ensure we have minimum values for color scale calculation
+            if (maxCost === 0) maxCost = 1;
+            if (maxTime === 0) maxTime = 1;
+            if (maxBufferReads === 0) maxBufferReads = 1;
+            
+            // Identify performance hotspots (top 15% by cost for complex plans)
+            const allNodes = root.descendants().filter(d => d.data.cost > 0);
+            allNodes.sort((a, b) => b.data.cost - a.data.cost);
+            const hotspotCount = Math.max(1, Math.floor(allNodes.length * 0.15));
+            performanceHotspots = allNodes.slice(0, hotspotCount).map(d => d.data.cost);
+            
+            // FIX: Add function to detect scan operations that might need indexes
+            function isScanOperation(operation) {
+                const scanKeywords = [
+                    'TABLE ACCESS FULL', 'SEQUENTIAL SCAN', 'TABLE SCAN', 
+                    'INDEX SCAN', 'BITMAP INDEX SCAN', 'INDEX FAST FULL SCAN',
+                    'CLUSTERED INDEX SCAN', 'NONCLUSTERED INDEX SCAN',
+                    'TABLE ACCESS BY INDEX ROWID', 'INDEX RANGE SCAN'
+                ];
+                return scanKeywords.some(keyword => 
+                    operation.toUpperCase().includes(keyword.toUpperCase())
+                );
+            }
+
+            // FIX: Add function to detect full table scans specifically
+            function isFullTableScan(operation) {
+                const fullScanKeywords = [
+                    'TABLE ACCESS FULL', 'SEQUENTIAL SCAN', 'TABLE SCAN'
+                ];
+                return fullScanKeywords.some(keyword => 
+                    operation.toUpperCase().includes(keyword.toUpperCase())
+                );
+            }
+            
+            // Enhanced color scale
+            const colorDomain = Math.max(maxCost, maxTime * 100, maxBufferReads * 10);
+
+            const colorScale = d3.scaleLinear()
+                .domain([0, colorDomain])
+                .range(["#10b981", "#f59e0b", "#ef4444"]);
+
+            // Compact separation for complex plans
+            const baseSeparation = 2.0;
+            const separationMultiplier = Math.max(1, planComplexity / 20);
+            
+            const tree = d3.tree().size([width, height]).separation((a, b) => {
+                const separation = baseSeparation * separationMultiplier;
+                return (a.parent === b.parent ? separation : separation * 1.1);
+            });
+
+            // Assigns the data to a hierarchy using parent-child relationships
+            const treeData2 = tree(root);
+
+            // CENTER THE TREE BY DEFAULT
+            const treeBounds = treeData2.descendants().reduce((bounds, d) => {
+                bounds.x0 = Math.min(bounds.x0, d.x);
+                bounds.x1 = Math.max(bounds.x1, d.x);
+                bounds.y0 = Math.min(bounds.y0, d.y);
+                bounds.y1 = Math.max(bounds.y1, d.y);
+                return bounds;
+            }, {x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity});
+
+            // Calculate centering transform
+            const treeWidth = treeBounds.x1 - treeBounds.x0;
+            const treeHeight = treeBounds.y1 - treeBounds.y0;
+            const centerX = (width - treeWidth) / 2 - treeBounds.x0;
+            const centerY = (height - treeHeight) / 2 - treeBounds.y0;
+
+            // Apply centering transform to all nodes
+            treeData2.descendants().forEach(d => {
+                d.x += centerX;
+                d.y += centerY;
+            });
+
+            // Compute the new tree layout
+            const nodes = treeData2.descendants();
+            const links = treeData2.links();
+
+            // Declare the links with enhanced styling
+            const link = svg.selectAll(".link")
+                .data(links)
+                .enter().append("path")
+                .attr("class", "link")
+                .attr("d", d3.linkVertical()
+                    .x(d => d.x)
+                    .y(d => d.y))
+                .style("fill", "none")
+                .style("stroke", "#3b82f6")
+                .style("stroke-width", 2)
+                .style("stroke-opacity", 0.7)
+                .style("z-index", "1");
+
+            // Declare the nodes
+            const node = svg.selectAll(".node")
+                .data(nodes)
+                .enter().append("g")
+                .attr("class", "node")
+                .attr("transform", d => `translate(${d.x},${d.y})`)
+                .style("z-index", "10");
+
+            // Add the circles for the nodes with compact sizing
+            node.append("circle")
+                .attr("r", d => {
+                    // Smaller circles for compact mode
+                    const baseRadius = 18;
+                    if (performanceHotspots.includes(d.data.cost)) {
+                        return baseRadius + 8;
+                    }
+                    if (d.data.cost > maxCost * 0.5) {
+                        return baseRadius + 4;
+                    }
+                    return baseRadius;
+                })
+                .style("fill", d => {
+                    // Enhanced multi-factor color coding
+                    const costFactor = d.data.cost / maxCost;
+                    const timeFactor = d.data.time / maxTime;
+                    const bufferFactor = d.data.buffers && d.data.buffers.shared_read ? d.data.buffers.shared_read / maxBufferReads : 0;
+                    
+                    // Ensure we have valid factors
+                    const validCostFactor = isNaN(costFactor) ? 0 : costFactor;
+                    const validTimeFactor = isNaN(timeFactor) ? 0 : timeFactor;
+                    const validBufferFactor = isNaN(bufferFactor) ? 0 : bufferFactor;
+                    
+                    const totalFactor = Math.max(validCostFactor, validTimeFactor, validBufferFactor);
+                    const colorValue = colorScale(totalFactor * colorDomain);
+                    
+                    return colorValue;
+                })
+                .style("stroke", d => {
+                    // FIX: Add special highlighting for scan operations
+                    if (isFullTableScan(d.data.operation)) {
+                        return "#dc2626"; // Red border for full table scans
+                    }
+                    if (isScanOperation(d.data.operation)) {
+                        return "#f59e0b"; // Orange border for other scans
+                    }
+                    if (performanceHotspots.includes(d.data.cost)) {
+                        return "#1f2937";
+                    }
+                    return d.data.cost === maxCost ? "#1f2937" : "#ffffff";
+                })
+                .style("stroke-width", d => {
+                    // FIX: Thicker border for scan operations
+                    if (isScanOperation(d.data.operation)) {
+                        return 3;
+                    }
+                    if (performanceHotspots.includes(d.data.cost)) {
+                        return 3;
+                    }
+                    return d.data.cost === maxCost ? 2.5 : 2;
+                })
+                .style("stroke-dasharray", d => {
+                    // FIX: Special pattern for full table scans
+                    if (isFullTableScan(d.data.operation)) {
+                        return "6,3"; // Dashed pattern for full scans
+                    }
+                    if (d.data.buffers && d.data.buffers.shared_read > 0) {
+                        return "4,4";
+                    }
+                    return "none";
+                })
+                .style("filter", d => {
+                    // FIX: Add glow effect for scan operations
+                    if (isFullTableScan(d.data.operation)) {
+                        return "drop-shadow(0 0 6px rgba(220, 38, 38, 0.5))"; // Red glow for full scans
+                    }
+                    if (isScanOperation(d.data.operation)) {
+                        return "drop-shadow(0 0 4px rgba(245, 158, 11, 0.4))"; // Orange glow for scans
+                    }
+                    if (performanceHotspots.includes(d.data.cost)) {
+                        return "drop-shadow(0 3px 6px rgba(0,0,0,0.3))";
+                    }
+                    return "drop-shadow(0 1px 3px rgba(0,0,0,0.1))";
+                })
+                .style("z-index", "5");
+
+                    // FIX: IMPROVED compact text positioning function with better branch handling
+        function calculateCompactTextPosition(d, textType) {
+            const baseOffset = 25 * complexityMultiplier; // Reduced for better association
+            const verticalSpacing = {
+                'operation': 0,
+                'metrics': 1.0 * complexityMultiplier, // Reduced spacing
+                'indicators': 2.5 * complexityMultiplier // Reduced spacing
+            };
+            
+            let xOffset = baseOffset;
+            let yOffset = verticalSpacing[textType] || 0;
+            
+            // FIX: IMPROVED side determination for better branch clarity
+            let isLeftSide = false;
+            
+            // For nodes with siblings, place text on opposite sides
+            if (d.parent && d.parent.children) {
+                const siblings = d.parent.children;
+                const siblingIndex = siblings.indexOf(d);
+                const totalSiblings = siblings.length;
+                
+                // FIX: Better logic for branching nodes - use opposite sides consistently
+                if (totalSiblings > 1) {
+                    // For even number of siblings: left, right, left, right...
+                    // For odd number: left, right, center, left, right...
+                    if (totalSiblings === 2) {
+                        // Two siblings: first on left, second on right
+                        isLeftSide = siblingIndex === 0;
+                    } else if (totalSiblings === 3) {
+                        // Three siblings: left, center, right
+                        if (siblingIndex === 0) isLeftSide = true;
+                        else if (siblingIndex === 1) {
+                            // Center sibling: use position-based logic
+                            isLeftSide = d.x < width / 2;
+                        } else isLeftSide = false;
+                    } else {
+                        // More than 3 siblings: alternate sides
+                        isLeftSide = siblingIndex % 2 === 0;
+                    }
+                } else {
+                    // Single child: use position-based logic
+                    isLeftSide = d.x < width / 2;
+                }
+            } else {
+                // Root or nodes without siblings: use position-based logic
+                isLeftSide = d.x < width / 2;
+            }
+            
+            // Adjust for depth to create better visual hierarchy
+            if (d.depth > 1) {
+                isLeftSide = !isLeftSide; // Invert for deeper levels
+            }
+            
+            if (isLeftSide) {
+                xOffset = -xOffset;
+            }
+            
+            // Reduced randomness for more predictable positioning
+            const randomOffset = (Math.random() - 0.5) * 0.5; // Further reduced randomness
+            yOffset += randomOffset;
+            
+            // Improved depth offset with better spacing
+            const depthOffset = d.depth * 0.5; // Reduced for tighter grouping
+            yOffset += depthOffset;
+            
+            // Enhanced sibling offset to prevent overlaps
+            if (d.parent && d.parent.children) {
+                const siblingIndex = d.parent.children.indexOf(d);
+                const totalSiblings = d.parent.children.length;
+                if (totalSiblings > 1) {
+                    const siblingOffset = (siblingIndex - (totalSiblings - 1) / 2) * 0.3; // Reduced for closer positioning
+                    yOffset += siblingOffset;
+                }
+            }
+            
+            // Additional offset based on text type to prevent overlap between operation and metrics
+            if (textType === 'metrics') {
+                yOffset += 0.5; // Small additional offset for metrics
+            }
+            
+            return {
+                x: xOffset,
+                y: yOffset,
+                anchor: isLeftSide ? "end" : "start",
+                isLeftSide: isLeftSide
+            };
+        }
+
+            // Enhanced connecting line - closer and more visible
+            node.append("line")
+                .attr("class", "text-connector")
+                .attr("x1", 0)
+                .attr("y1", 0)
+                .attr("x2", d => calculateCompactTextPosition(d, 'operation').x)
+                .attr("y2", d => calculateCompactTextPosition(d, 'operation').y * 12)
+                .style("stroke", "#374151")
+                .style("stroke-width", "2px") // Thicker line for better visibility
+                .style("stroke-dasharray", "2,2") // Smaller dash pattern
+                .style("opacity", "0.8") // Higher opacity for better visibility
+                .style("z-index", "10")
+                .style("pointer-events", "none");
+
+            // Simplified operation labels with cleaner styling
+            node.append("text")
+                .attr("class", "operation-label-compact")
+                .attr("dy", d => calculateCompactTextPosition(d, 'operation').y + "em")
+                .attr("x", d => calculateCompactTextPosition(d, 'operation').x)
+                .style("text-anchor", d => calculateCompactTextPosition(d, 'operation').anchor)
+                .text(d => {
+                    // More aggressive truncation for cleaner look
+                    const operation = d.data.operation;
+                    return operation.length > 15 ? operation.substring(0, 12) + "..." : operation;
+                })
+                .style("font-size", "10px") // Smaller font
+                .style("font-weight", "600")
+                .style("fill", "#1f2937")
+                .style("dominant-baseline", "middle")
+                .style("z-index", "20")
+                .style("pointer-events", "none")
+                .style("background", "rgba(255,255,255,0.9)") // Lighter background
+                .style("padding", "2px 4px") // Smaller padding
+                .style("border-radius", "3px")
+                .style("border", "1px solid rgba(107, 114, 128, 0.15)");
+
+            // Metrics text without indicators (separated for better clarity)
+            node.append("text")
+                .attr("class", "metrics-compact")
+                .attr("dy", d => calculateCompactTextPosition(d, 'metrics').y + "em")
+                .attr("x", d => calculateCompactTextPosition(d, 'metrics').x)
+                .style("text-anchor", d => calculateCompactTextPosition(d, 'metrics').anchor)
+                .text(d => {
+                    let metrics = [];
+                    
+                    // Build metrics string (for all database engines)
+                    if (d.data.cost !== undefined && d.data.cost !== null) {
+                        metrics.push(`C:${d.data.cost.toFixed(1)}`);
+                    }
+                    if (d.data.rows !== undefined && d.data.rows !== null) {
+                        metrics.push(`R:${d.data.rows.toLocaleString()}`);
+                    }
+                    if (d.data.time !== undefined && d.data.time !== null && d.data.time > 0) {
+                        metrics.push(`T:${d.data.time.toFixed(1)}`);
+                    }
+                    if (d.data.buffers && d.data.buffers.shared_read > 0) {
+                        metrics.push(`IO:${d.data.buffers.shared_read}`);
+                    }
+                    // Show bytes if available (Oracle specific)
+                    if (d.data.bytes !== undefined && d.data.bytes !== null && d.data.bytes > 0) {
+                        metrics.push(`B:${d.data.bytes.toLocaleString()}`);
+                    }
+                    
+                    return metrics.join(" | ");
+                })
+                .style("font-size", "8px") // Smaller font
+                .style("fill", "#6b7280")
+                .style("font-weight", "500")
+                .style("dominant-baseline", "middle")
+                .style("z-index", "15")
+                .style("pointer-events", "none")
+                .style("background", "rgba(255,255,255,0.85)")
+                .style("padding", "1px 3px")
+                .style("border-radius", "2px")
+                .style("border", "1px solid rgba(107, 114, 128, 0.1)");
+
+            // Separate performance indicators with proper spacing
+            node.append("text")
+                .attr("class", "performance-indicators-compact")
+                .attr("dy", d => calculateCompactTextPosition(d, 'indicators').y + "em")
+                .attr("x", d => calculateCompactTextPosition(d, 'indicators').x)
+                .style("text-anchor", d => calculateCompactTextPosition(d, 'indicators').anchor)
+                .text(d => {
+                    let indicators = [];
+                    
+                    // Collect indicators with proper spacing
+                    if (performanceHotspots.includes(d.data.cost)) {
+                        indicators.push("🔥");
+                    }
+                    if (d.data.buffers && d.data.buffers.shared_read > maxBufferReads * 0.5) {
+                        indicators.push("💾");
+                    }
+                    if (d.data.time > maxTime * 0.5) {
+                        indicators.push("⏱️");
+                    }
+                    // FIX: Add scan operation indicators
+                    if (isFullTableScan(d.data.operation)) {
+                        indicators.push("📋"); // Full table scan indicator
+                    } else if (isScanOperation(d.data.operation)) {
+                        indicators.push("🔍"); // General scan indicator
+                    }
+                    
+                    return indicators.join("  "); // Double space between indicators
+                })
+                .style("font-size", "10px") // Slightly larger for better visibility
+                .style("fill", "#dc2626")
+                .style("font-weight", "bold")
+                .style("dominant-baseline", "middle")
+                .style("z-index", "16") // Higher z-index to ensure visibility
+                .style("pointer-events", "none")
+                .style("text-shadow", "0 1px 2px rgba(255,255,255,0.9)");
+
+            // Simplified hotspot indicator - only for the most critical nodes
+            node.filter(d => {
+                return performanceHotspots.includes(d.data.cost) && d.data.cost > maxCost * 0.8; // Only top 20% of hotspots
+            })
+            .append("circle")
+                .attr("r", d => 22 + (d.data.cost / maxCost) * 3) // Smaller glow
+                .style("fill", "none")
+                .style("stroke", "#dc2626")
+                .style("stroke-width", "1.5px") // Thinner stroke
+                .style("stroke-dasharray", "4,4") // Smaller dash pattern
+                .style("opacity", "0.4") // Lower opacity
+                .style("z-index", "1")
+                .style("pointer-events", "none");
+
+
+
+            // Add comprehensive tooltips with all metrics for compact mode
+            node.append("title")
+                .text(d => {
+                    let tooltip = `Operation: ${d.data.operation}\n`;
+                    tooltip += `Cost: ${d.data.cost.toFixed(2)}\n`;
+                    tooltip += `Rows: ${d.data.rows.toLocaleString()}\n`;
+                    if (d.data.time > 0) tooltip += `Time: ${d.data.time.toFixed(2)}ms\n`;
+                    if (d.data.buffers) {
+                        if (d.data.buffers.shared_hit) tooltip += `Buffer Hits: ${d.data.buffers.shared_hit}\n`;
+                        if (d.data.buffers.shared_read) tooltip += `Buffer Reads: ${d.data.buffers.shared_read}\n`;
+                        if (d.data.buffers.shared_written) tooltip += `Buffer Writes: ${d.data.buffers.shared_written}\n`;
+                    }
+                    if (d.data.filter) tooltip += `Filter: ${d.data.filter}\n`;
+                    if (d.data.join_condition) tooltip += `Join: ${d.data.join_condition}\n`;
+                    if (performanceHotspots.includes(d.data.cost)) tooltip += `\n🔥 Performance Hotspot`;
+                    if (d.data.buffers && d.data.buffers.shared_read > maxBufferReads * 0.5) tooltip += `\n💾 I/O Heavy`;
+                    if (d.data.time > maxTime * 0.5) tooltip += `\n⏱️ Slow Operation`;
+                    // FIX: Add scan operation warnings
+                    if (isFullTableScan(d.data.operation)) {
+                        tooltip += `\n📋 Full Table Scan - Consider adding indexes for better performance`;
+                    } else if (isScanOperation(d.data.operation)) {
+                        tooltip += `\n🔍 Scan Operation - Review index usage`;
+                    }
+                    return tooltip;
+                });
+
+            // Create compact legend
+            const legendContainer = d3.select(container).append("div")
+                .style("position", "absolute")
+                .style("bottom", "80px") // Moved to bottom to avoid blocking view
+                .style("right", "20px")
+                .style("width", "250px")
+                .style("background", "rgba(255, 255, 255, 0.95)")
+                .style("border", "2px solid #e5e7eb")
+                .style("border-radius", "10px")
+                .style("padding", "12px")
+                .style("box-shadow", "0 6px 24px rgba(0, 0, 0, 0.1)")
+                .style("z-index", "100")
+                .style("backdrop-filter", "blur(10px)")
+                .style("max-height", "250px") // Limit height
+                .style("overflow-y", "auto"); // Make scrollable if needed
+
+            // Legend title
+            legendContainer.append("div")
+                .style("font-size", "14px")
+                .style("font-weight", "bold")
+                .style("color", "#1f2937")
+                .style("margin-bottom", "10px")
+                .style("text-align", "center")
+                .text("Performance Legend");
+
+            // Performance levels
+            legendContainer.append("div")
+                .style("font-size", "12px")
+                .style("font-weight", "600")
+                .style("color", "#374151")
+                .style("margin-bottom", "6px")
+                .text("Performance Levels:");
+
+            const performanceLevels = [
+                { color: "#10b981", label: "Low Cost/Time" },
+                { color: "#f59e0b", label: "Medium Cost/Time" },
+                { color: "#ef4444", label: "High Cost/Time" }
+            ];
+
+            performanceLevels.forEach((item, i) => {
+                const legendItem = legendContainer.append("div")
+                    .style("display", "flex")
+                    .style("align-items", "center")
+                    .style("margin-bottom", "4px");
+
+                legendItem.append("div")
+                    .style("width", "12px")
+                    .style("height", "12px")
+                    .style("border-radius", "50%")
+                    .style("background", item.color)
+                    .style("border", "1px solid #ffffff")
+                    .style("margin-right", "8px")
+                    .style("box-shadow", "0 1px 3px rgba(0,0,0,0.1)");
+
+                legendItem.append("span")
+                    .style("font-size", "10px")
+                    .style("color", "#374151")
+                    .text(item.label);
+            });
+
+            // Add operation type indicators
+            legendContainer.append("div")
+                .style("font-size", "12px")
+                .style("font-weight", "600")
+                .style("color", "#374151")
+                .style("margin-top", "10px")
+                .style("margin-bottom", "6px")
+                .text("Operation Types:");
+
+            const operationTypes = [
+                { pattern: "none", label: "CPU Operations" },
+                { pattern: "4,4", label: "I/O Operations" }
+            ];
+
+            operationTypes.forEach((item, i) => {
+                const legendItem = legendContainer.append("div")
+                    .style("display", "flex")
+                    .style("align-items", "center")
+                    .style("margin-bottom", "4px");
+
+                legendItem.append("div")
+                    .style("width", "12px")
+                    .style("height", "12px")
+                    .style("border-radius", "50%")
+                    .style("background", "#3b82f6")
+                    .style("border", "1px solid #ffffff")
+                    .style("border-style", item.pattern === "none" ? "solid" : "dashed")
+                    .style("margin-right", "8px")
+                    .style("box-shadow", "0 1px 3px rgba(0,0,0,0.1)");
+
+                legendItem.append("span")
+                    .style("font-size", "10px")
+                    .style("color", "#374151")
+                    .text(item.label);
+            });
+
+            // Add performance indicators section
+            legendContainer.append("div")
+                .style("font-size", "12px")
+                .style("font-weight", "600")
+                .style("color", "#374151")
+                .style("margin-top", "10px")
+                .style("margin-bottom", "6px")
+                .text("Performance Indicators:");
+
+            const indicators = [
+                { symbol: "🔥", label: "Performance Hotspot" },
+                { symbol: "💾", label: "I/O Heavy Operation" },
+                { symbol: "⏱️", label: "Slow Operation" },
+                { symbol: "📋", label: "Full Table Scan (Needs Index)" },
+                { symbol: "🔍", label: "Scan Operation (Review Index)" }
+            ];
+
+            indicators.forEach((item, i) => {
+                const legendItem = legendContainer.append("div")
+                    .style("display", "flex")
+                    .style("align-items", "center")
+                    .style("margin-bottom", "4px");
+
+                legendItem.append("span")
+                    .style("font-size", "10px")
+                    .style("color", "#dc2626")
+                    .style("font-weight", "bold")
+                    .style("margin-right", "8px")
+                    .text(item.symbol);
+
+                legendItem.append("span")
+                    .style("font-size", "10px")
+                    .style("color", "#374151")
+                    .text(item.label);
+            });
+
+            // Add visualization controls
+            addVisualizationControls(vizContainer, container);
+        }
+
+        // Helper function to add visualization controls
+        function addVisualizationControls(vizContainer, container) {
+            // Create controls container
+            const controlsContainer = d3.select(container).append("div")
+                .style("position", "absolute")
+                .style("bottom", "20px")
+                .style("left", "20px")
+                .style("z-index", "1000")
+                .style("display", "flex")
+                .style("gap", "8px")
+                .style("flex-wrap", "wrap")
+                .style("background", "rgba(255, 255, 255, 0.95)")
+                .style("padding", "8px")
+                .style("border-radius", "6px")
+                .style("box-shadow", "0 2px 8px rgba(0,0,0,0.1)")
+                .style("border", "1px solid rgba(0,0,0,0.1)");
+
+            // Fit to Screen button
+            controlsContainer.append("button")
+                .attr("type", "button")
+                .attr("class", "btn btn-outline-primary btn-sm")
+                .style("font-size", "11px")
+                .style("padding", "4px 8px")
+                .style("border-radius", "6px")
+                .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)")
+                .text("Fit to Screen")
+                .on("click", function(event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const svg = vizContainer.select("svg");
+                    const zoom = d3.zoom().on("zoom", (event) => {
+                        svg.select("g").attr("transform", event.transform);
+                    });
+                    svg.call(zoom.transform, d3.zoomIdentity);
+                });
+
+            // Zoom In button
+            controlsContainer.append("button")
+                .attr("type", "button")
+                .attr("class", "btn btn-outline-primary btn-sm")
+                .style("font-size", "11px")
+                .style("padding", "4px 8px")
+                .style("border-radius", "6px")
+                .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)")
+                .text("Zoom In")
+                .on("click", function(event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const svg = vizContainer.select("svg");
+                    const zoom = d3.zoom().on("zoom", (event) => {
+                        svg.select("g").attr("transform", event.transform);
+                    });
+                    svg.call(zoom.scaleBy, 1.5);
+                });
+
+            // Zoom Out button
+            controlsContainer.append("button")
+                .attr("type", "button")
+                .attr("class", "btn btn-outline-primary btn-sm")
+                .style("font-size", "11px")
+                .style("padding", "4px 8px")
+                .style("border-radius", "6px")
+                .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)")
+                .text("Zoom Out")
+                .on("click", function(event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const svg = vizContainer.select("svg");
+                    const zoom = d3.zoom().on("zoom", (event) => {
+                        svg.select("g").attr("transform", event.transform);
+                    });
+                    svg.call(zoom.scaleBy, 0.75);
+                });
+
+            // Export PNG button
+            controlsContainer.append("button")
+                .attr("type", "button")
+                .attr("class", "btn btn-outline-success btn-sm")
+                .style("font-size", "11px")
+                .style("padding", "4px 8px")
+                .style("border-radius", "6px")
+                .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)")
+                .text("Export PNG")
+                .on("click", function(event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    exportToPNG(vizContainer);
+                });
+
+            // Export SVG button
+            controlsContainer.append("button")
+                .attr("type", "button")
+                .attr("class", "btn btn-outline-success btn-sm")
+                .style("font-size", "11px")
+                .style("padding", "4px 8px")
+                .style("border-radius", "6px")
+                .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)")
+                .text("Export SVG")
+                .on("click", function(event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    exportToSVG(vizContainer);
+                });
+        }
+
+// Export functions for visualization controls
+function exportToPNG(vizContainer) {
+    try {
+        const svg = vizContainer.select("svg").node();
+        if (!svg) {
+            console.error('SVG element not found');
+            return;
         }
         
-        return {
-            x: xOffset,
-            y: yOffset,
-            anchor: isLeftSide ? "end" : "start"
-        };
-    }
-
-    // Add labels for the nodes with improved spacing and collision avoidance
-    node.append("text")
-        .attr("class", "operation-label")
-        .attr("dy", d => calculateTextPosition(d, 'operation').y + "em")
-        .attr("x", d => calculateTextPosition(d, 'operation').x)
-        .style("text-anchor", d => calculateTextPosition(d, 'operation').anchor)
-        .text(d => d.data.operation)
-        .style("font-size", "13px")
-        .style("font-weight", "600")
-        .style("fill", "#1f2937")
-        .style("text-shadow", "0 1px 2px rgba(255,255,255,0.8)")
-        .style("letter-spacing", "0.5px")
-        .style("dominant-baseline", "middle");
-
-    // Add enhanced metrics text with better spacing - ALWAYS SHOW METRICS
-    node.append("text")
-        .attr("class", "metrics")
-        .attr("dy", d => calculateTextPosition(d, 'metrics').y + "em")
-        .attr("x", d => calculateTextPosition(d, 'metrics').x)
-        .style("text-anchor", d => calculateTextPosition(d, 'metrics').anchor)
-        .text(d => {
-            // Debug: Log the data to see what's available
-            console.log("Node data:", d.data);
-            
-            let metrics = [];
-            // Always show cost if available
-            if (d.data.cost !== undefined && d.data.cost !== null) {
-                metrics.push(`Cost: ${d.data.cost.toFixed(2)}`);
-            }
-            // Always show rows if available
-            if (d.data.rows !== undefined && d.data.rows !== null) {
-                metrics.push(`Rows: ${d.data.rows.toLocaleString()}`);
-            }
-            // Always show time if available
-            if (d.data.time !== undefined && d.data.time !== null && d.data.time > 0) {
-                metrics.push(`Time: ${d.data.time.toFixed(2)}ms`);
-            }
-            // Show buffers if available
-            if (d.data.buffers && d.data.buffers.shared_read > 0) {
-                metrics.push(`I/O: ${d.data.buffers.shared_read}`);
-            }
-            // If no metrics available, show a placeholder
-            if (metrics.length === 0) {
-                metrics.push("No metrics available");
-            }
-            
-            const metricsText = metrics.join(" | ");
-            console.log("Metrics text:", metricsText);
-            return metricsText;
-        })
-        .style("font-size", "11px")
-        .style("fill", "#6b7280")
-        .style("font-weight", "500")
-        .style("text-shadow", "0 1px 2px rgba(255,255,255,0.8)")
-        .style("dominant-baseline", "middle")
-        .style("overflow", "visible")
-        .style("white-space", "normal");
-
-    // Add performance indicators with improved spacing
-    node.append("text")
-        .attr("class", "performance-indicators")
-        .attr("dy", d => calculateTextPosition(d, 'indicators').y + "em")
-        .attr("x", d => calculateTextPosition(d, 'indicators').x)
-        .style("text-anchor", d => calculateTextPosition(d, 'indicators').anchor)
-        .text(d => {
-            let indicators = [];
-            if (performanceHotspots.includes(d.data.cost)) {
-                indicators.push("🔥 Hotspot");
-            }
-            if (d.data.buffers && d.data.buffers.shared_read > maxBufferReads * 0.5) {
-                indicators.push("💾 I/O Heavy");
-            }
-            if (d.data.time > maxTime * 0.5) {
-                indicators.push("⏱️ Slow");
-            }
-            return indicators.join(" ");
-        })
-        .style("font-size", "10px")
-        .style("fill", "#dc2626")
-        .style("font-weight", "bold")
-        .style("text-shadow", "0 1px 2px rgba(255,255,255,0.8)")
-        .style("dominant-baseline", "middle");
-
-    // Add tooltips with detailed information
-    node.append("title")
-        .text(d => {
-            let tooltip = `Operation: ${d.data.operation}\n`;
-            tooltip += `Cost: ${d.data.cost.toFixed(2)}\n`;
-            tooltip += `Rows: ${d.data.rows.toLocaleString()}\n`;
-            if (d.data.time > 0) tooltip += `Time: ${d.data.time.toFixed(2)}ms\n`;
-            if (d.data.buffers) {
-                if (d.data.buffers.shared_hit) tooltip += `Buffer Hits: ${d.data.buffers.shared_hit}\n`;
-                if (d.data.buffers.shared_read) tooltip += `Buffer Reads: ${d.data.buffers.shared_read}\n`;
-                if (d.data.buffers.shared_written) tooltip += `Buffer Writes: ${d.data.buffers.shared_written}\n`;
-            }
-            if (d.data.filter) tooltip += `Filter: ${d.data.filter}\n`;
-            if (d.data.join_condition) tooltip += `Join: ${d.data.join_condition}\n`;
-            if (performanceHotspots.includes(d.data.cost)) tooltip += `\n🔥 Performance Hotspot`;
-            return tooltip;
-        });
-
-    // Add controls with enhanced styling - REMOVED DOWNLOAD PNG AND COPY MERMAID BUTTONS
-    const controls = d3.select(container).append("div")
-        .style("margin-top", "15px")
-        .style("text-align", "center")
-        .style("padding", "10px")
-        .style("background", "linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)")
-        .style("border-radius", "8px")
-        .style("border", "1px solid #cbd5e1");
-
-    controls.append("button")
-        .text("🔍 Fit to Screen")
-        .style("margin", "0 8px")
-        .style("padding", "8px 16px")
-        .style("background", "linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)")
-        .style("color", "white")
-        .style("border", "none")
-        .style("border-radius", "6px")
-        .style("font-weight", "600")
-        .style("cursor", "pointer")
-        .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)")
-        .on("mouseover", function() {
-            d3.select(this).style("transform", "translateY(-1px)").style("box-shadow", "0 4px 8px rgba(0,0,0,0.2)");
-        })
-        .on("mouseout", function() {
-            d3.select(this).style("transform", "translateY(0)").style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)");
-        })
-        .on("click", () => {
-            d3.select(container).select("svg").transition().duration(750).call(
-                zoom.transform,
-                d3.zoomIdentity
-            );
-        });
-
-    controls.append("button")
-        .text("📊 Toggle Metrics")
-        .style("margin", "0 8px")
-        .style("padding", "8px 16px")
-        .style("background", "linear-gradient(135deg, #10b981 0%, #059669 100%)")
-        .style("color", "white")
-        .style("border", "none")
-        .style("border-radius", "6px")
-        .style("font-weight", "600")
-        .style("cursor", "pointer")
-        .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)")
-        .on("mouseover", function() {
-            d3.select(this).style("transform", "translateY(-1px)").style("box-shadow", "0 4px 8px rgba(0,0,0,0.2)");
-        })
-        .on("mouseout", function() {
-            d3.select(this).style("transform", "translateY(0)").style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)");
-        })
-        .on("click", () => {
-            const metrics = d3.selectAll(".metrics");
-            const isVisible = metrics.style("display") !== "none";
-            metrics.style("display", isVisible ? "none" : "block");
-        });
-
-    controls.append("button")
-        .text("⚠️ Toggle Indicators")
-        .style("margin", "0 8px")
-        .style("padding", "8px 16px")
-        .style("background", "linear-gradient(135deg, #f59e0b 0%, #d97706 100%)")
-        .style("color", "white")
-        .style("border", "none")
-        .style("border-radius", "6px")
-        .style("font-weight", "600")
-        .style("cursor", "pointer")
-        .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)")
-        .on("mouseover", function() {
-            d3.select(this).style("transform", "translateY(-1px)").style("box-shadow", "0 4px 8px rgba(0,0,0,0.2)");
-        })
-        .on("mouseout", function() {
-            d3.select(this).style("transform", "translateY(0)").style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)");
-        })
-        .on("click", () => {
-            const indicators = d3.selectAll(".performance-indicators");
-            const isVisible = indicators.style("display") !== "none";
-            indicators.style("display", isVisible ? "none" : "block");
-        });
-
-    controls.append("button")
-        .text("📷 Export PNG")
-        .style("margin", "0 8px")
-        .style("padding", "8px 16px")
-        .style("background", "linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)")
-        .style("color", "white")
-        .style("border", "none")
-        .style("border-radius", "6px")
-        .style("font-weight", "600")
-        .style("cursor", "pointer")
-        .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)")
-        .on("mouseover", function() {
-            d3.select(this).style("transform", "translateY(-1px)").style("box-shadow", "0 4px 8px rgba(0,0,0,0.2)");
-        })
-        .on("mouseout", function() {
-            d3.select(this).style("transform", "translateY(0)").style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)");
-        })
-        .on("click", () => exportToPNG(container.querySelector("svg")));
-
-    controls.append("button")
-        .text("🖼️ Export SVG")
-        .style("margin", "0 8px")
-        .style("padding", "8px 16px")
-        .style("background", "linear-gradient(135deg, #ec4899 0%, #db2777 100%)")
-        .style("color", "white")
-        .style("border", "none")
-        .style("border-radius", "6px")
-        .style("font-weight", "600")
-        .style("cursor", "pointer")
-        .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)")
-        .on("mouseover", function() {
-            d3.select(this).style("transform", "translateY(-1px)").style("box-shadow", "0 4px 8px rgba(0,0,0,0.2)");
-        })
-        .on("mouseout", function() {
-            d3.select(this).style("transform", "translateY(0)").style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)");
-        })
-        .on("click", () => exportToSVG(container.querySelector("svg")));
-
-    // Add performance summary with enhanced styling
-    const summary = d3.select(container).append("div")
-        .style("margin-top", "20px")
-        .style("padding", "15px")
-        .style("background", "linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)")
-        .style("border-radius", "10px")
-        .style("border", "2px solid #cbd5e1")
-        .style("box-shadow", "0 4px 6px rgba(0,0,0,0.1)");
-
-    summary.append("h6")
-        .text("📈 Performance Summary")
-        .style("margin", "0 0 15px 0")
-        .style("color", "#1f2937")
-        .style("font-weight", "700")
-        .style("text-align", "center")
-        .style("font-size", "16px");
-
-    const summaryStats = summary.append("div")
-        .style("display", "grid")
-        .style("grid-template-columns", "repeat(auto-fit, minmax(180px, 1fr))")
-        .style("gap", "15px");
-
-    summaryStats.append("div")
-        .html(`<strong>💰 Max Cost:</strong> ${maxCost.toFixed(2)}`)
-        .style("font-size", "13px")
-        .style("padding", "8px")
-        .style("background", "rgba(59, 130, 246, 0.1)")
-        .style("border-radius", "6px")
-        .style("border-left", "4px solid #3b82f6");
-
-    summaryStats.append("div")
-        .html(`<strong>⏱️ Max Time:</strong> ${maxTime.toFixed(2)}ms`)
-        .style("font-size", "13px")
-        .style("padding", "8px")
-        .style("background", "rgba(16, 185, 129, 0.1)")
-        .style("border-radius", "6px")
-        .style("border-left", "4px solid #10b981");
-
-    summaryStats.append("div")
-        .html(`<strong>💾 Max I/O:</strong> ${maxBufferReads.toLocaleString()} reads`)
-        .style("font-size", "13px")
-        .style("padding", "8px")
-        .style("background", "rgba(245, 158, 11, 0.1)")
-        .style("border-radius", "6px")
-        .style("border-left", "4px solid #f59e0b");
-
-    summaryStats.append("div")
-        .html(`<strong>🔥 Hotspots:</strong> ${performanceHotspots.length} identified`)
-        .style("font-size", "13px")
-        .style("padding", "8px")
-        .style("background", "rgba(239, 68, 68, 0.1)")
-        .style("border-radius", "6px")
-        .style("border-left", "4px solid #ef4444");
-
-    function exportToPNG(svgNode) {
-        // Get the full SVG dimensions including all content
-        const svgRect = svgNode.getBoundingClientRect();
-        const containerRect = container.getBoundingClientRect();
+        // Create a canvas to convert SVG to PNG
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
         
-        // Calculate the actual content bounds
-        const bbox = svgNode.getBBox();
-        const fullWidth = bbox.width + margin.left + margin.right;
-        const fullHeight = bbox.height + margin.top + margin.bottom;
+        // Get SVG dimensions
+        const svgRect = svg.getBoundingClientRect();
+        canvas.width = svgRect.width;
+        canvas.height = svgRect.height;
         
-        // Create a temporary SVG with the full dimensions
-        const tempSvg = svgNode.cloneNode(true);
-        tempSvg.setAttribute('width', fullWidth);
-        tempSvg.setAttribute('height', fullHeight);
-        tempSvg.setAttribute('viewBox', `0 0 ${fullWidth} ${fullHeight}`);
+        // Convert SVG to data URL
+        const svgData = new XMLSerializer().serializeToString(svg);
+        const svgBlob = new Blob([svgData], {type: 'image/svg+xml;charset=utf-8'});
+        const url = URL.createObjectURL(svgBlob);
         
-        const serializer = new XMLSerializer();
-        const svgStr = serializer.serializeToString(tempSvg);
-        
-        const canvas = document.createElement("canvas");
-        canvas.width = fullWidth;
-        canvas.height = fullHeight;
-        const ctx = canvas.getContext("2d");
+        // Create image and draw to canvas
         const img = new Image();
-        
-        img.onload = () => {
-            ctx.fillStyle = "white";
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        img.onload = function() {
             ctx.drawImage(img, 0, 0);
-            const png = canvas.toDataURL("image/png");
-            const a = document.createElement("a");
-            a.href = png;
-            a.download = "explain_plan.png";
-            a.click();
+            URL.revokeObjectURL(url);
+            
+            // Convert canvas to blob and download
+            canvas.toBlob(function(blob) {
+                const downloadUrl = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = downloadUrl;
+                a.download = 'execution_plan.png';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(downloadUrl);
+            });
         };
-        
-        img.src = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(svgStr)));
+        img.src = url;
+    } catch (error) {
+        console.error('Error exporting to PNG:', error);
+        alert('Failed to export PNG. Please try again.');
     }
+}
 
-    function exportToSVG(svgNode) {
-        // Get the full SVG dimensions including all content
-        const bbox = svgNode.getBBox();
-        const fullWidth = bbox.width + margin.left + margin.right;
-        const fullHeight = bbox.height + margin.top + margin.bottom;
+function exportToSVG(vizContainer) {
+    try {
+        const svg = vizContainer.select("svg").node();
+        if (!svg) {
+            console.error('SVG element not found');
+            return;
+        }
         
-        // Create a temporary SVG with the full dimensions
-        const tempSvg = svgNode.cloneNode(true);
-        tempSvg.setAttribute('width', fullWidth);
-        tempSvg.setAttribute('height', fullHeight);
-        tempSvg.setAttribute('viewBox', `0 0 ${fullWidth} ${fullHeight}`);
+        // Serialize SVG to string
+        const svgData = new XMLSerializer().serializeToString(svg);
         
-        const serializer = new XMLSerializer();
-        const svgStr = serializer.serializeToString(tempSvg);
-        const blob = new Blob([svgStr], {type: "image/svg+xml"});
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
+        // Create blob and download
+        const svgBlob = new Blob([svgData], {type: 'image/svg+xml;charset=utf-8'});
+        const url = URL.createObjectURL(svgBlob);
+        
+        const a = document.createElement('a');
         a.href = url;
-        a.download = "explain_plan.svg";
+        a.download = 'execution_plan.svg';
+        document.body.appendChild(a);
         a.click();
+        document.body.removeChild(a);
         URL.revokeObjectURL(url);
+    } catch (error) {
+        console.error('Error exporting to SVG:', error);
+        alert('Failed to export SVG. Please try again.');
     }
 }
 
@@ -1625,27 +2539,84 @@ ORDER BY cr.sale_month DESC, cr.sales_rank;`,
         ]
     },
     mysql: {
-        sql: `SELECT u.id, u.name, COUNT(o.id) AS order_count\nFROM users u\nLEFT JOIN orders o ON u.id = o.user_id\nWHERE u.status = 'active'\nGROUP BY u.id, u.name\nHAVING COUNT(o.id) > 0\nORDER BY order_count DESC\nLIMIT 10;`,
-        explain: `id | select_type | table | type | possible_keys | key | key_len | ref | rows | Extra\n1 | SIMPLE | users | ALL | NULL | NULL | NULL | NULL | 120000 | Using where\n1 | SIMPLE | orders | ref | user_id | user_id | 4 | users.id | 5 |`,
+        sql: `SELECT 
+    p.product_name,
+    c.category_name,
+    COUNT(oi.order_id) as order_count,
+    SUM(oi.quantity * oi.unit_price) as total_revenue,
+    AVG(oi.unit_price) as avg_price
+FROM products p
+JOIN categories c ON p.category_id = c.category_id
+JOIN order_items oi ON p.product_id = oi.product_id
+JOIN orders o ON oi.order_id = o.order_id
+WHERE o.status = 'completed'
+    AND o.created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)
+GROUP BY p.product_name, c.category_name
+HAVING COUNT(oi.order_id) > 5
+ORDER BY total_revenue DESC;`,
+        explain: `+----+-------------+-------+-------+----------------------+----------------------+---------+------+--------+-----------------------------------------------------+
+| id | select_type | table | type  | possible_keys        | key                  | key_len | ref  | rows   | Extra                                               |
++----+-------------+-------+-------+----------------------+----------------------+---------+------+--------+-----------------------------------------------------+
+|  1 | SIMPLE      | o     | ALL   | PRIMARY,idx_status   | NULL                 | NULL    | NULL | 100000 | Using where; Using temporary; Using filesort       |
+|  1 | SIMPLE      | oi    | ref   | PRIMARY,idx_product  | PRIMARY              | 4       | o.id |      5 | NULL                                                |
+|  1 | SIMPLE      | p     | eq_ref| PRIMARY,idx_category | PRIMARY              | 4       | oi.p |      1 | NULL                                                |
+|  1 | SIMPLE      | c     | eq_ref| PRIMARY,idx_name     | PRIMARY              | 4       | p.c  |      1 | NULL                                                |
++----+-------------+-------+-------+----------------------+----------------------+---------+------+--------+-----------------------------------------------------+`,
         tables: [
-            ['users', 'CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(100), status VARCHAR(20));', '120000', '500MB', true, 'id', false, '', ''],
-            ['orders', 'CREATE TABLE orders (id INT PRIMARY KEY, user_id INT, amount DECIMAL(10,2), created_at DATETIME);', '500000', '2GB', true, 'id', true, 'user_id', 'users']
+            ['categories', 'CREATE TABLE categories (category_id INT PRIMARY KEY, category_name VARCHAR(100) NOT NULL, description TEXT, parent_category_id INT REFERENCES categories(category_id));', '1000', '500KB', true, 'category_id', false, '', ''],
+            ['products', 'CREATE TABLE products (product_id INT PRIMARY KEY, category_id INT NOT NULL REFERENCES categories(category_id), product_name VARCHAR(200) NOT NULL, description TEXT, unit_price DECIMAL(10,2) NOT NULL, weight DECIMAL(8,2), dimensions VARCHAR(50));', '10000', '5MB', true, 'product_id', true, 'category_id', 'categories'],
+            ['customers', 'CREATE TABLE customers (customer_id INT PRIMARY KEY, email VARCHAR(255) NOT NULL, first_name VARCHAR(50), last_name VARCHAR(50), address TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);', '50000', '10MB', true, 'customer_id', false, '', ''],
+            ['orders', 'CREATE TABLE orders (order_id INT PRIMARY KEY, customer_id INT NOT NULL REFERENCES customers(customer_id), status VARCHAR(20) NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, shipped_at TIMESTAMP, total_amount DECIMAL(12,2));', '100000', '20MB', true, 'order_id', true, 'customer_id', 'customers'],
+            ['order_items', 'CREATE TABLE order_items (order_id INT REFERENCES orders(order_id), product_id INT REFERENCES products(product_id), quantity INT NOT NULL, unit_price DECIMAL(10,2) NOT NULL, PRIMARY KEY (order_id, product_id));', '250000', '40MB', true, 'order_id,product_id', true, 'product_id', 'products']
         ],
         indexes: [
-            ['idx_status', 'users', 'CREATE INDEX idx_status ON users(status);', '50MB'],
-            ['idx_orders_user', 'orders', 'CREATE INDEX idx_orders_user ON orders(user_id);', '200MB']
+            ['idx_category_name', 'categories', 'CREATE INDEX idx_category_name ON categories(category_name);', '100KB'],
+            ['idx_product_category', 'products', 'CREATE INDEX idx_product_category ON products(category_id);', '1MB'],
+            ['idx_customer_email', 'customers', 'CREATE UNIQUE INDEX idx_customer_email ON customers(email);', '2MB'],
+            ['idx_order_customer', 'orders', 'CREATE INDEX idx_order_customer ON orders(customer_id);', '4MB'],
+            ['idx_order_status_date', 'orders', 'CREATE INDEX idx_order_status_date ON orders(status, created_at);', '5MB'],
+            ['idx_order_items_product', 'order_items', 'CREATE INDEX idx_order_items_product ON order_items(product_id);', '8MB']
         ]
     },
     sqlserver: {
-        sql: `SELECT u.id, u.name, COUNT(o.id) AS order_count\nFROM users u\nLEFT JOIN orders o ON u.id = o.user_id\nWHERE u.status = 'active'\nGROUP BY u.id, u.name\nHAVING COUNT(o.id) > 0\nORDER BY order_count DESC;`,
-        explain: `|--Clustered Index Scan(OBJECT:([dbo].[users]))\n|--Hash Match(Inner Join, HASH:([u].[id])=([o].[user_id]))\n|--Clustered Index Scan(OBJECT:([dbo].[orders]))`,
+        sql: `SELECT 
+    p.product_name,
+    c.category_name,
+    COUNT(oi.order_id) as order_count,
+    SUM(oi.quantity * oi.unit_price) as total_revenue,
+    AVG(oi.unit_price) as avg_price
+FROM products p
+JOIN categories c ON p.category_id = c.category_id
+JOIN order_items oi ON p.product_id = oi.product_id
+JOIN orders o ON oi.order_id = o.order_id
+WHERE o.status = 'completed'
+    AND o.created_at >= DATEADD(month, -6, GETDATE())
+GROUP BY p.product_name, c.category_name
+HAVING COUNT(oi.order_id) > 5
+ORDER BY total_revenue DESC;`,
+                        explain: `|--Sort(ORDER BY:([oi].[quantity]*[oi].[unit_price] DESC) (cost=0.0..150.0 rows=1000 width=0, io=500)
+    |--Hash Match(Aggregate, HASH:([p].[product_name], [c].[category_name]), RESIDUAL:([p].[product_name] = [p].[product_name] AND [c].[category_name] = [c].[category_name])) (cost=0.0..200.0 rows=1000 width=0, io=800)
+        |--Hash Match(Inner Join, HASH:([oi].[product_id])=([p].[product_id])) (cost=0.0..250.0 rows=5000 width=0, io=1200)
+            |--Hash Match(Inner Join, HASH:([o].[order_id])=([oi].[order_id])) (cost=0.0..300.0 rows=10000 width=0, io=2000)
+                |--Clustered Index Scan(OBJECT:([dbo].[orders].[PK_orders]), WHERE:([o].[status]='completed' AND [o].[created_at]>=DATEADD(month,(-6),GETDATE()))) (cost=0.0..100.0 rows=50000 width=0, io=1500)
+                |--Clustered Index Scan(OBJECT:([dbo].[order_items].[PK_order_items])) (cost=0.0..150.0 rows=250000 width=0, io=3000)
+            |--Hash Match(Inner Join, HASH:([p].[category_id])=([c].[category_id])) (cost=0.0..120.0 rows=10000 width=0, io=600)
+                |--Clustered Index Scan(OBJECT:([dbo].[products].[PK_products])) (cost=0.0..80.0 rows=10000 width=0, io=400)
+                |--Clustered Index Scan(OBJECT:([dbo].[categories].[PK_categories])) (cost=0.0..50.0 rows=1000 width=0, io=200)`,
         tables: [
-            ['users', 'CREATE TABLE users (id INT PRIMARY KEY, name NVARCHAR(100), status NVARCHAR(20));', '120000', '500MB', true, 'id', false, '', ''],
-            ['orders', 'CREATE TABLE orders (id INT PRIMARY KEY, user_id INT, amount DECIMAL(10,2), created_at DATETIME);', '500000', '2GB', true, 'id', true, 'user_id', 'users']
+            ['categories', 'CREATE TABLE categories (category_id INT PRIMARY KEY, category_name NVARCHAR(100) NOT NULL, description NVARCHAR(MAX), parent_category_id INT REFERENCES categories(category_id));', '1000', '500KB', true, 'category_id', false, '', ''],
+            ['products', 'CREATE TABLE products (product_id INT PRIMARY KEY, category_id INT NOT NULL REFERENCES categories(category_id), product_name NVARCHAR(200) NOT NULL, description NVARCHAR(MAX), unit_price DECIMAL(10,2) NOT NULL, weight DECIMAL(8,2), dimensions NVARCHAR(50));', '10000', '5MB', true, 'product_id', true, 'category_id', 'categories'],
+            ['orders', 'CREATE TABLE orders (order_id INT PRIMARY KEY, customer_id INT NOT NULL REFERENCES customers(customer_id), status NVARCHAR(20) NOT NULL, created_at DATETIME DEFAULT GETDATE(), shipped_at DATETIME, total_amount DECIMAL(12,2));', '100000', '20MB', true, 'order_id', true, 'customer_id', 'customers'],
+            ['order_items', 'CREATE TABLE order_items (order_id INT REFERENCES orders(order_id), product_id INT REFERENCES products(product_id), quantity INT NOT NULL, unit_price DECIMAL(10,2) NOT NULL, CONSTRAINT PK_order_items PRIMARY KEY (order_id, product_id));', '250000', '40MB', true, 'order_id,product_id', true, 'product_id', 'products'],
+            ['customers', 'CREATE TABLE customers (customer_id INT PRIMARY KEY, email NVARCHAR(255) NOT NULL, first_name NVARCHAR(50), last_name NVARCHAR(50), address NVARCHAR(MAX), created_at DATETIME DEFAULT GETDATE());', '50000', '10MB', true, 'customer_id', false, '', '']
         ],
         indexes: [
-            ['idx_status', 'users', 'CREATE INDEX idx_status ON users(status);', '50MB'],
-            ['idx_orders_user', 'orders', 'CREATE INDEX idx_orders_user ON orders(user_id);', '200MB']
+            ['idx_category_name', 'categories', 'CREATE INDEX idx_category_name ON categories(category_name);', '100KB'],
+            ['idx_product_category', 'products', 'CREATE INDEX idx_product_category ON products(category_id);', '1MB'],
+            ['idx_customer_email', 'customers', 'CREATE UNIQUE INDEX idx_customer_email ON customers(email);', '2MB'],
+            ['idx_order_customer', 'orders', 'CREATE INDEX idx_order_customer ON orders(customer_id);', '4MB'],
+            ['idx_order_status_date', 'orders', 'CREATE INDEX idx_order_status_date ON orders(status, created_at);', '5MB'],
+            ['idx_order_items_product', 'order_items', 'CREATE INDEX idx_order_items_product ON order_items(product_id);', '8MB']
         ]
     },
     oracle: {
@@ -1733,18 +2704,60 @@ Predicate Information (identified by operation id):
         ]
     },
     sqlite: {
-        sql: `SELECT u.id, u.name, COUNT(o.id) AS order_count\nFROM users u\nLEFT JOIN orders o ON u.id = o.user_id\nWHERE u.status = 'active'\nGROUP BY u.id, u.name\nHAVING COUNT(o.id) > 0\nORDER BY order_count DESC\nLIMIT 10;`,
-        explain: `SCAN TABLE users\nSEARCH TABLE orders USING INDEX idx_orders_user (user_id=?)`,
+        sql: `SELECT 
+    p.product_name,
+    c.category_name,
+    COUNT(oi.order_id) as order_count,
+    SUM(oi.quantity * oi.unit_price) as total_revenue,
+    AVG(oi.unit_price) as avg_price
+FROM products p
+JOIN categories c ON p.category_id = c.category_id
+JOIN order_items oi ON p.product_id = oi.product_id
+JOIN orders o ON oi.order_id = o.order_id
+WHERE o.status = 'completed'
+    AND o.created_at >= datetime('now', '-6 months')
+GROUP BY p.product_name, c.category_name
+HAVING COUNT(oi.order_id) > 5
+ORDER BY total_revenue DESC;`,
+        explain: `QUERY PLAN
+SEARCH TABLE orders USING INDEX idx_order_status_date (status=? AND created_at>=?)
+SCAN TABLE order_items
+SEARCH TABLE products USING INTEGER PRIMARY KEY (rowid=?)
+SEARCH TABLE categories USING INTEGER PRIMARY KEY (rowid=?)
+USE TEMP B-TREE FOR GROUP BY
+USE TEMP B-TREE FOR ORDER BY`,
         tables: [
-            ['users', 'CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, status TEXT);', '120000', '500MB', true, 'id', false, '', ''],
-            ['orders', 'CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER, amount REAL, created_at TEXT);', '500000', '2GB', true, 'id', true, 'user_id', 'users']
+            ['categories', 'CREATE TABLE categories (category_id INTEGER PRIMARY KEY, category_name TEXT NOT NULL, description TEXT, parent_category_id INTEGER REFERENCES categories(category_id));', '1000', '500KB', true, 'category_id', false, '', ''],
+            ['products', 'CREATE TABLE products (product_id INTEGER PRIMARY KEY, category_id INTEGER NOT NULL REFERENCES categories(category_id), product_name TEXT NOT NULL, description TEXT, unit_price REAL NOT NULL, weight REAL, dimensions TEXT);', '10000', '5MB', true, 'product_id', true, 'category_id', 'categories'],
+            ['customers', 'CREATE TABLE customers (customer_id INTEGER PRIMARY KEY, email TEXT NOT NULL, first_name TEXT, last_name TEXT, address TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);', '50000', '10MB', true, 'customer_id', false, '', ''],
+            ['orders', 'CREATE TABLE orders (order_id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(customer_id), status TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP, shipped_at TEXT, total_amount REAL);', '100000', '20MB', true, 'order_id', true, 'customer_id', 'customers'],
+            ['order_items', 'CREATE TABLE order_items (order_id INTEGER REFERENCES orders(order_id), product_id INTEGER REFERENCES products(product_id), quantity INTEGER NOT NULL, unit_price REAL NOT NULL, PRIMARY KEY (order_id, product_id));', '250000', '40MB', true, 'order_id,product_id', true, 'product_id', 'products']
         ],
         indexes: [
-            ['idx_status', 'users', 'CREATE INDEX idx_status ON users(status);', '50MB'],
-            ['idx_orders_user', 'orders', 'CREATE INDEX idx_orders_user ON orders(user_id);', '200MB']
+            ['idx_category_name', 'categories', 'CREATE INDEX idx_category_name ON categories(category_name);', '100KB'],
+            ['idx_product_category', 'products', 'CREATE INDEX idx_product_category ON products(category_id);', '1MB'],
+            ['idx_customer_email', 'customers', 'CREATE UNIQUE INDEX idx_customer_email ON customers(email);', '2MB'],
+            ['idx_order_customer', 'orders', 'CREATE INDEX idx_order_customer ON orders(customer_id);', '4MB'],
+            ['idx_order_status_date', 'orders', 'CREATE INDEX idx_order_status_date ON orders(status, created_at);', '5MB'],
+            ['idx_order_items_product', 'order_items', 'CREATE INDEX idx_order_items_product ON order_items(product_id);', '8MB']
         ]
     }
 };
+
+// Helper function to calculate plan complexity
+function calculatePlanComplexity(treeData) {
+    let complexity = 0;
+    
+    function traverse(node) {
+        complexity += 1;
+        if (node.children) {
+            node.children.forEach(traverse);
+        }
+    }
+    
+    traverse(treeData);
+    return complexity;
+}
 
 function loadSampleData() {
     // 1. Detect selected DB engine
@@ -1816,3 +2829,19 @@ function loadSampleData() {
     document.body.appendChild(ariaAnnouncement);
     setTimeout(() => document.body.removeChild(ariaAnnouncement), 3000);
 }
+
+        function renderD3Tree(treeData, container) {
+            // Calculate plan complexity to determine visualization type
+            const planComplexity = calculatePlanComplexity(treeData);
+            
+            // Use compact mode for very complex plans (≥20 nodes) - increased threshold
+            if (planComplexity >= 20) {
+                renderCompactTree(treeData, container);
+                return;
+            }
+            
+            // Use detailed mode for simple and moderately complex plans (≤19 nodes)
+            renderDetailedTree(treeData, container);
+        }
+
+        // Detailed visualization for simple plans (≤15 nodes)
