@@ -71,20 +71,6 @@ class SQLInputForm(FlaskForm):
         if not self.db_engine.data:
             self.db_engine.data = 'postgresql'
 
-def check_join_on_clause(tokens, join_idx):
-    """Check if a JOIN has an ON clause by looking ahead intelligently"""
-    has_on = False
-    # Look ahead up to 15 tokens to find ON clause
-    for i in range(join_idx + 1, min(join_idx + 15, len(tokens))):
-        token = tokens[i]
-        if token.match(sqlparse.tokens.Keyword, 'ON', regex=False):
-            has_on = True
-            break
-        # If we hit another JOIN, FROM, WHERE, GROUP BY, ORDER BY, stop looking
-        if token.match(sqlparse.tokens.Keyword, ['JOIN', 'FROM', 'WHERE', 'GROUP', 'ORDER', 'HAVING'], regex=False):
-            break
-    return has_on
-
 def analyze_sql_query(sql_query, tables, indexes, db_engine, explain_plan=None):
     """
     Dispatch to engine-specific analysis logic. For now, returns a placeholder report.
@@ -119,131 +105,66 @@ def parse_size_to_mb(size_str):
     return 0.0
 
 def calculate_performance_score(sql_query, tables, indexes, warnings, actionable_keys_count, explain_plan=None, db_engine=None, actionable_recommendations=None):
-    """
-    Calculate a realistic performance score based on query analysis and execution plan.
-    More stringent scoring that properly penalizes performance issues.
-    """
     score = 100
     breakdown_dict = {}
     score_capped_reason = None
-    
     def add_item(category, type_, reason, points, context):
         if category not in breakdown_dict:
             breakdown_dict[category] = []
         breakdown_dict[category].append({'type': type_, 'reason': reason, 'points': points, 'context': context})
-    
-    # Plan-driven deductions - More severe penalties for FTS
+    # Plan-driven deductions
     fts_tables = extract_fts_tables_from_explain(explain_plan, db_engine) if explain_plan and db_engine else set()
     num_fts = len(fts_tables)
-    
     if num_fts > 0:
-        # More severe penalty: -30 points per FTS table (was -20)
-        pts = -min(num_fts * 30, 90)  # Cap at -90 points for multiple FTS
+        pts = -min(num_fts * 20, 60)
         score += pts
         for t in fts_tables:
-            add_item('Execution Plan', 'deduction', f'Full Table Scan detected on {t}', -30, t)
-    
+            add_item('Execution Plan', 'deduction', f'Full Table Scan detected on {t}', -20, t)
     # Plan-driven index recommendations
     alias_to_table = get_alias_to_table_mapping(sql_query)
     fts_index_recs = recommend_indexes_for_fts_tables(sql_query, indexes, alias_to_table, tables, explain_plan, db_engine) if explain_plan and db_engine else []
     num_missing_indexes = len([rec for rec in fts_index_recs if rec['key'][0] == 'fts_index'])
     num_investigation = len([rec for rec in fts_index_recs if rec['key'][0] == 'fts_index_exists'])
-    
     if num_missing_indexes > 0:
-        # More severe penalty: -25 points per missing index (was -15)
-        pts = -min(num_missing_indexes * 25, 75)
+        pts = -min(num_missing_indexes * 15, 45)
         score += pts
         add_item('Indexing', 'deduction', f'{num_missing_indexes} missing index(es) for FTS tables', pts, f'{num_missing_indexes} missing indexes')
-    
     if num_investigation > 0:
-        # More severe penalty: -20 points per unused index (was -10)
-        pts = -min(num_investigation * 20, 60)
+        pts = -min(num_investigation * 10, 30)
         score += pts
         add_item('Indexing', 'deduction', f'{num_investigation} index(es) not used by optimizer (investigation needed)', pts, f'{num_investigation} index not used')
-    
-    # Bonuses for actual index usage in plan - Reduced bonus
+    # Bonuses for actual index usage in plan
     keywords = EXPLAIN_KEYWORDS.get(db_engine, {}) if db_engine else {}
     index_scan_keywords = keywords.get('index', [])
     if explain_plan and any(kw in explain_plan for kw in index_scan_keywords):
-        score += 5  # Reduced from 10 to 5
-        add_item('Execution Plan', 'bonus', 'Index usage detected in EXPLAIN plan', 5, 'Index scan in plan')
-    
-    # Additional penalties for other performance issues
-    if re.search(r'SELECT\s+\*', sql_query, re.IGNORECASE):
-        score -= 15  # Penalty for SELECT *
-        add_item('Query Structure', 'deduction', 'SELECT * used - specify only needed columns', -15, 'SELECT *')
-    
-    # Penalty for missing WHERE clause in large tables
-    if not re.search(r'WHERE\s+', sql_query, re.IGNORECASE) and tables:
-        score -= 10
-        add_item('Query Structure', 'deduction', 'No WHERE clause detected - may scan entire table', -10, 'No WHERE clause')
-    
-    # Penalty for cartesian joins - use improved detection logic
-    import sqlparse
-    parsed = sqlparse.parse(sql_query)
-    cartesian_joins = 0
-    for stmt in parsed:
-        tokens = list(stmt.flatten())
-        join_indices = [i for i, t in enumerate(tokens) if t.match(sqlparse.tokens.Keyword, 'JOIN', regex=False)]
-        for idx in join_indices:
-            # Find table name after JOIN
-            table_name = '(unknown)'
-            for i in range(idx + 1, min(idx + 5, len(tokens))):
-                token = tokens[i]
-                if token.is_whitespace:
-                    continue
-                if token.match(sqlparse.tokens.Keyword, ['ON', 'USING', 'NATURAL'], regex=False):
-                    break
-                if token.ttype in [sqlparse.tokens.Name, sqlparse.tokens.Name.Placeholder]:
-                    table_name = token.value.strip()
-                    break
-            
-            # Check if ON clause exists using helper function
-            has_on = check_join_on_clause(tokens, idx)
-            
-            if not has_on and table_name != '(unknown)':
-                cartesian_joins += 1
-    
-    if cartesian_joins > 0:
-        score -= 20
-        add_item('Query Structure', 'deduction', f'{cartesian_joins} JOIN(s) without ON clause detected', -20, f'{cartesian_joins} cartesian JOIN(s)')
-    
-    # Cap score and set grade - More realistic grading
+        score += 10
+        add_item('Execution Plan', 'bonus', 'Index usage detected in EXPLAIN plan', 10, 'Index scan in plan')
+    # Cap score and set grade
     score = max(1, min(100, score))
     total_deductions = sum(item['points'] for items in breakdown_dict.values() for item in items if item['type'] == 'deduction')
     total_bonuses = sum(item['points'] for items in breakdown_dict.values() for item in items if item['type'] == 'bonus')
-    
-    # More realistic score capping
-    if num_fts > 0:
-        if score > 70:  # Cap at 70 if FTS detected (was 90)
-            score = 70
-            score_capped_reason = 'Score capped due to Full Table Scan(s).'
-    elif num_missing_indexes > 0:
-        if score > 75:  # Cap at 75 if missing indexes (was 90)
-            score = 75
-            score_capped_reason = 'Score capped due to missing indexes.'
-    
-    # More realistic performance levels
-    if score >= 85:
+    if num_fts > 0 or num_missing_indexes > 0 or num_investigation > 0:
+        if score > 90:
+            score = 90
+            score_capped_reason = 'Score capped due to FTS or missing/unused indexes.'
+    if score >= 90:
         performance_level = "Excellent"
         performance_color = "success"
-    elif score >= 70:
+    elif score >= 75:
         performance_level = "Good"
         performance_color = "info"
-    elif score >= 50:
+    elif score >= 60:
         performance_level = "Fair"
         performance_color = "warning"
-    elif score >= 30:
+    elif score >= 40:
         performance_level = "Poor"
         performance_color = "danger"
     else:
         performance_level = "Very Poor"
         performance_color = "danger"
-    
     calculation = f"100 + {total_bonuses} (strengths) - {abs(total_deductions)} (areas for improvement) = {score}"
     if score_capped_reason:
         calculation += f" ({score_capped_reason})"
-    
     breakdown = [{'category': cat, 'items': items} for cat, items in breakdown_dict.items()]
     return {
         'score': score,
@@ -410,50 +331,22 @@ def calculate_performance_metrics(sql_query, tables, indexes, db_engine, explain
         keywords = EXPLAIN_KEYWORDS.get(db_engine, {})
         index_scan_keywords = keywords.get('index', [])
         table_scan_keywords = keywords.get('table', []) + keywords.get('sequential', []) + keywords.get('full_scan', []) + keywords.get('scan', [])
-        
-        # Enhanced Oracle index detection
-        if db_engine == 'oracle':
-            # Oracle-specific index patterns
-            oracle_index_patterns = ['INDEX', 'ROWID', 'UNIQUE SCAN', 'RANGE SCAN', 'DOMAIN INDEX']
-            oracle_table_scan_patterns = ['TABLE ACCESS FULL', 'FULL TABLE SCAN']
-            
-            # Count index vs table scan operations
-            index_ops = sum(1 for pattern in oracle_index_patterns if pattern in explain_plan_str.upper())
-            table_scan_ops = sum(1 for pattern in oracle_table_scan_patterns if pattern in explain_plan_str.upper())
-            
-            if table_scan_ops > 0 and index_ops == 0:
-                metrics['index_utilization'] = 0
-                metrics['data_access_pattern'] = 'Full Scan'
-            elif index_ops > 0 and table_scan_ops == 0:
-                metrics['index_utilization'] = 100
-                metrics['data_access_pattern'] = 'Indexed'
-            elif index_ops > 0 and table_scan_ops > 0:
-                # Mixed usage - calculate percentage
-                total_ops = index_ops + table_scan_ops
-                metrics['index_utilization'] = int((index_ops / total_ops) * 100)
-                metrics['data_access_pattern'] = 'Mixed'
-            else:
-                # Default for Oracle if no clear patterns
-                metrics['index_utilization'] = 50
-                metrics['data_access_pattern'] = 'Unknown'
+        # Index Utilization
+        if any(kw in explain_plan_str for kw in table_scan_keywords):
+            metrics['index_utilization'] = 0
+        elif any(kw in explain_plan_str for kw in index_scan_keywords):
+            metrics['index_utilization'] = 100
         else:
-            # Original logic for other engines
-            # Index Utilization
-            if any(kw in explain_plan_str for kw in table_scan_keywords):
-                metrics['index_utilization'] = 0
-            elif any(kw in explain_plan_str for kw in index_scan_keywords):
-                metrics['index_utilization'] = 100
-            else:
-                metrics['index_utilization'] = 0
-            # Data Access Pattern
-            if any(kw in explain_plan_str for kw in table_scan_keywords):
-                metrics['data_access_pattern'] = 'Full Scan'
-            elif any(kw in explain_plan_str for kw in index_scan_keywords):
-                metrics['data_access_pattern'] = 'Indexed'
-            elif join_count > 0:
-                metrics['data_access_pattern'] = 'Join-based'
-            else:
-                metrics['data_access_pattern'] = 'Simple'
+            metrics['index_utilization'] = 0
+        # Data Access Pattern
+        if any(kw in explain_plan_str for kw in table_scan_keywords):
+            metrics['data_access_pattern'] = 'Full Scan'
+        elif any(kw in explain_plan_str for kw in index_scan_keywords):
+            metrics['data_access_pattern'] = 'Indexed'
+        elif join_count > 0:
+            metrics['data_access_pattern'] = 'Join-based'
+        else:
+            metrics['data_access_pattern'] = 'Simple'
         # --- Improved Optimization Potential Calculation ---
         # 1. Count FTS tables and estimate their size/rows from plan
         fts_tables = extract_fts_tables_from_explain(explain_plan, db_engine) if explain_plan and db_engine else set()
@@ -469,83 +362,28 @@ def calculate_performance_metrics(sql_query, tables, indexes, db_engine, explain
             # fallback: if no row info, count FTS tables
             large_fts_tables = len(fts_tables)
         actionable_total = len(actionable_recommendations or [])
-        
-        # Enhanced optimization potential calculation
-        if db_engine == 'oracle':
-            # For Oracle, check if the plan shows excellent performance
-            oracle_index_indicators = ['INDEX ROWID', 'INDEX UNIQUE SCAN', 'INDEX RANGE SCAN', 'DOMAIN INDEX']
-            index_indicators_count = sum(1 for indicator in oracle_index_indicators if indicator in explain_plan_str.upper())
-            
-            # If Oracle plan shows extensive index usage and no FTS, very low optimization potential
-            if index_indicators_count >= 3 and len(fts_tables) == 0:
-                metrics['optimization_potential'] = 0
-            elif index_indicators_count >= 2 and len(fts_tables) == 0:
-                metrics['optimization_potential'] = 5  # Minimal potential
-            elif large_fts_tables >= 2:
-                metrics['optimization_potential'] = 100
-            elif large_fts_tables == 1:
-                metrics['optimization_potential'] = 80
-            elif len(fts_tables) > 0:
-                metrics['optimization_potential'] = 60
-            elif actionable_total > 0:
-                # For well-performing queries, reduce the impact of actionable recommendations
-                metrics['optimization_potential'] = min(10 + actionable_total * 3, 30)
-            else:
-                metrics['optimization_potential'] = 0
+        # Heuristic: high optimization potential if multiple FTS on large tables or any FTS tables (even without row info)
+        if large_fts_tables >= 2:
+            metrics['optimization_potential'] = 100
+        elif large_fts_tables == 1:
+            metrics['optimization_potential'] = 80
+        elif len(fts_tables) > 0:
+            metrics['optimization_potential'] = 60
+        elif actionable_total > 0:
+            metrics['optimization_potential'] = min(40 + actionable_total * 10, 80)
         else:
-            # Original logic for other engines
-            # Heuristic: high optimization potential if multiple FTS on large tables or any FTS tables (even without row info)
-            if large_fts_tables >= 2:
-                metrics['optimization_potential'] = 100
-            elif large_fts_tables == 1:
-                metrics['optimization_potential'] = 80
-            elif len(fts_tables) > 0:
-                metrics['optimization_potential'] = 60
-            elif actionable_total > 0:
-                metrics['optimization_potential'] = min(40 + actionable_total * 10, 80)
-            else:
-                metrics['optimization_potential'] = 0
-        # Performance Grade - Aligned with performance score logic
-        # Check if this is a high-performing query (score 90-100)
-        if metrics['index_utilization'] >= 80 and metrics['data_access_pattern'] in ['Indexed', 'Join-based'] and metrics['optimization_potential'] <= 20:
+            metrics['optimization_potential'] = 0
+        # Performance Grade
+        if metrics['index_utilization'] == 100 and metrics['data_access_pattern'] == 'Indexed' and metrics['optimization_potential'] == 0:
             metrics['performance_grade'] = 'A'
-        elif metrics['index_utilization'] >= 60 and metrics['optimization_potential'] <= 40:
+        elif metrics['index_utilization'] >= 60 and metrics['optimization_potential'] <= 20:
             metrics['performance_grade'] = 'B'
-        elif metrics['index_utilization'] >= 40 and metrics['optimization_potential'] <= 60:
+        elif metrics['index_utilization'] >= 40 and metrics['optimization_potential'] <= 40:
             metrics['performance_grade'] = 'C'
-        elif metrics['index_utilization'] >= 20 and metrics['optimization_potential'] <= 80:
+        elif metrics['index_utilization'] >= 20:
             metrics['performance_grade'] = 'D'
         else:
             metrics['performance_grade'] = 'F'
-        
-        # Special case: If the query has good index usage but shows as "F", 
-        # check if it's actually performing well (Oracle often shows good index usage)
-        if metrics['performance_grade'] == 'F' and metrics['index_utilization'] > 0:
-            # For Oracle plans with index usage, upgrade the grade
-            if 'INDEX' in explain_plan_str.upper() or 'ROWID' in explain_plan_str.upper():
-                if metrics['index_utilization'] >= 50:
-                    metrics['performance_grade'] = 'B'
-                elif metrics['index_utilization'] >= 30:
-                    metrics['performance_grade'] = 'C'
-                else:
-                    metrics['performance_grade'] = 'D'
-        
-        # Enhanced Oracle-specific grade adjustment
-        if db_engine == 'oracle':
-            # If Oracle plan shows extensive index usage, upgrade the grade
-            oracle_index_indicators = ['INDEX ROWID', 'INDEX UNIQUE SCAN', 'INDEX RANGE SCAN', 'DOMAIN INDEX']
-            index_indicators_count = sum(1 for indicator in oracle_index_indicators if indicator in explain_plan_str.upper())
-            
-            if index_indicators_count >= 3:  # Multiple index operations indicate good performance
-                if metrics['performance_grade'] in ['C', 'D', 'F']:
-                    metrics['performance_grade'] = 'A'
-                elif metrics['performance_grade'] == 'B':
-                    metrics['performance_grade'] = 'A'
-            elif index_indicators_count >= 2:
-                if metrics['performance_grade'] in ['D', 'F']:
-                    metrics['performance_grade'] = 'B'
-                elif metrics['performance_grade'] == 'C':
-                    metrics['performance_grade'] = 'B'
         # Remove or hide any metric that cannot be made accurate (already done by fallback to 'Unknown')
     except Exception as e:
         metrics['performance_grade'] = 'C'
@@ -559,6 +397,12 @@ def analyze_postgresql(sql_query, tables, indexes, explain_plan=None):
     warnings = []
     optimized_query = None
     summary = []
+    
+    # Parse explain plan to JSON for enhanced analysis
+    execution_tree = None
+    if explain_plan:
+        execution_tree = parse_explain_to_json(explain_plan, 'postgresql')
+    
     explain_mermaid = parse_explain_plan_to_mermaid(explain_plan, 'postgresql')
     alias_to_table = get_alias_to_table_mapping(sql_query)
     detected_engine = detect_engine_from_explain(explain_plan)
@@ -574,91 +418,47 @@ def analyze_postgresql(sql_query, tables, indexes, explain_plan=None):
             'warnings': warnings,
             'engine_mismatch': True
         }
-    
-    # FIXED: Strip hints before parsing SQL
-    sql_for_analysis = sql_query
-    # Remove any /* ... */ comments including hints
-    sql_for_analysis = re.sub(r'/\*.*?\*/', '', sql_query, flags=re.DOTALL | re.IGNORECASE)
-    
-    if re.search(r'SELECT\s+\*', sql_for_analysis, re.IGNORECASE):
-        recommendations.append({
-            'text': "Replace SELECT * with explicit column names for better performance and maintainability.",
-            'actionable': True, 'sub': [], 'key': ('query', 'select_star')
-        })
+    if re.search(r'SELECT\s+\*', sql_query, re.IGNORECASE):
+        recommendations.append({'text': "Replace SELECT * with explicit column names for better performance and maintainability.", 'actionable': True, 'sub': [], 'key': ('query', 'select_star')})
+        summary.append("Query uses SELECT *; consider selecting only needed columns.")
         warnings.append("Avoid using SELECT *. Specify only the columns you need for better performance and maintainability.")
-        optimized_query = re.sub(r'SELECT\s+\*', 'SELECT <columns>', sql_for_analysis, flags=re.IGNORECASE)
-        summary.append("SELECT * detected")
-    # Improved JOIN/ON detection using sqlparse
-    parsed = sqlparse.parse(sql_for_analysis)
-    lines = sql_for_analysis.splitlines()
+        optimized_query = re.sub(r'SELECT\s+\*', 'SELECT <columns>', sql_query, flags=re.IGNORECASE)
+    parsed = sqlparse.parse(sql_query)
+    lines = sql_query.splitlines()
     for stmt in parsed:
         tokens = list(stmt.flatten())
         join_indices = [i for i, t in enumerate(tokens) if t.match(sqlparse.tokens.Keyword, 'JOIN', regex=False)]
         for idx in join_indices:
-            # Find the actual table name after JOIN, skipping SQL keywords
-            table_name = '(unknown)'
-            lineno = '?'
-            
-            # Look for table name after JOIN, skipping SQL keywords
-            for i in range(idx + 1, min(idx + 5, len(tokens))):
-                token = tokens[i]
-                if token.is_whitespace:
-                    continue
-                if token.match(sqlparse.tokens.Keyword, ['ON', 'USING', 'NATURAL'], regex=False):
+            table_token = tokens[idx + 1] if idx + 1 < len(tokens) else None
+            table_name = table_token.value if table_token and table_token.value.strip() else '(unknown)'
+            for lineno, line in enumerate(lines, 1):
+                if table_name in line and 'JOIN' in line.upper():
                     break
-                if token.ttype in [sqlparse.tokens.Name, sqlparse.tokens.Name.Placeholder]:
-                    table_name = token.value.strip()
-                    # Find line number
-                    for line_num, line in enumerate(lines, 1):
-                        if table_name in line and 'JOIN' in line.upper():
-                            lineno = line_num
-                            break
+            else:
+                lineno = '?'
+            has_on = False
+            for t in tokens[idx+2:idx+6]:
+                if t.match(sqlparse.tokens.Keyword, 'ON', regex=False):
+                    has_on = True
                     break
-            
-            # Check if ON clause exists using helper function
-            has_on = check_join_on_clause(tokens, idx)
-            
-            if not has_on and table_name != '(unknown)':
+            if not has_on:
                 warn_msg = f"JOIN without ON clause for table {table_name} (line {lineno})"
                 recommendations.append({'text': f"Add an ON clause to the JOIN for table {table_name} (line {lineno}) to avoid cartesian products and improve performance.", 'actionable': True, 'sub': [], 'key': ('join', table_name, lineno)})
                 warnings.append(warn_msg)
-                summary.append("JOIN clauses missing ON conditions")
-    if re.search(r'FROM\s*\(\s*SELECT', sql_for_analysis, re.IGNORECASE):
-        # Enhanced subquery detection for Oracle - less aggressive for complex queries
-        # Check if this is a complex but well-performing query
-        oracle_index_indicators = ['INDEX ROWID', 'INDEX UNIQUE SCAN', 'INDEX RANGE SCAN', 'DOMAIN INDEX']
-        index_indicators_count = sum(1 for indicator in oracle_index_indicators if indicator in (explain_plan or '').upper())
-        
-        # If the query shows excellent index usage, make the subquery recommendation less aggressive
-        if index_indicators_count >= 3:
-            recommendations.append({
-                'text': "Query uses subqueries in FROM clause. While this can be optimized, the current execution plan shows excellent index usage. Consider using the Compare SQL feature to test alternative JOIN-based approaches.",
-                'actionable': False, 'sub': [], 'key': ('query', 'subquery_to_join')
-            })
-            summary.append("Query uses subquery in FROM clause (well-optimized).")
-        else:
-            recommendations.append({
-                'text': "Consider rewriting subqueries in FROM clause as JOINs for better performance and readability. Use the Compare SQL feature to test different approaches.",
-                'actionable': True, 'sub': [], 'key': ('query', 'subquery_to_join')
-            })
+                summary.append(warn_msg)
+    if re.search(r'FROM\s*\(\s*SELECT', sql_query, re.IGNORECASE):
+        recommendations.append({'text': "Consider rewriting subqueries in FROM clause as JOINs for better performance and readability.", 'actionable': True, 'sub': [], 'key': ('query', 'subquery_to_join')})
         summary.append("Query uses subquery in FROM clause.")
-    recommendations.extend(get_real_column_index_recommendations(sql_for_analysis, indexes, alias_to_table, tables))
+    recommendations.extend(get_real_column_index_recommendations(sql_query, indexes, alias_to_table, tables))
     # FTS table summary and recommendations
     fts_tables = extract_fts_tables_from_explain(explain_plan, 'postgresql') if explain_plan else set()
     if fts_tables:
         summary.append(f"Full Table Scan detected on: {', '.join(sorted(fts_tables))}")
-        # Don't add generic FTS warnings - specific recommendations will handle this
-    # Only show 'No indexes provided' if no actionable FTS/index recommendations exist
+        for fts_table in fts_tables:
+            recommendations.append({'text': f"Table '{fts_table}' is accessed via Full Table Scan. Review for possible indexing or query rewrite.", 'actionable': True, 'sub': [], 'key': ('fts_review', fts_table)})
     actionable_recs = [r for r in recommendations if r.get('actionable')]
     if not indexes and not actionable_recs:
         recommendations.append({'text': "No indexes provided. Consider adding indexes on columns used in WHERE, JOIN, and ORDER BY clauses.", 'actionable': False, 'sub': [], 'key': ('index', 'none', 'none')})
-    
-    # Add recommendation to use Compare SQL feature for testing alternatives
-    if actionable_recs:
-        recommendations.append({
-            'text': "💡 Use the Compare SQL feature to test different optimization approaches and see performance differences side-by-side.",
-            'actionable': False, 'sub': [], 'key': ('feature', 'compare_sql')
-        })
     # Deduplicate recommendations
     seen = set()
     deduped_recs = []
@@ -679,19 +479,15 @@ def analyze_postgresql(sql_query, tables, indexes, explain_plan=None):
     if recommendations and isinstance(recommendations[0], dict):
         actionable_keys = set(r['key'] for r in recommendations if r.get('actionable'))
         actionable_keys_count = len(actionable_keys)
-    performance_score = calculate_performance_score(sql_for_analysis, tables, indexes, warnings, actionable_keys_count, explain_plan, db_engine='postgresql')
-    performance_metrics = calculate_performance_metrics(sql_for_analysis, tables, indexes, 'postgresql', explain_plan, [r for r in recommendations if r.get('actionable')])
-    # FTS index recommendations
-    fts_index_recs = recommend_indexes_for_fts_tables(sql_for_analysis, indexes, alias_to_table, tables, explain_plan, 'postgresql')
-    
-    # Remove any generic FTS review recommendations that will be replaced by specific ones
-    recommendations = [rec for rec in recommendations if not (rec.get('key') and rec['key'][0] == 'fts_review')]
-    
-    # Add enhanced FTS recommendations
+    performance_score = calculate_performance_score(sql_query, tables, indexes, warnings, actionable_keys_count, explain_plan, db_engine='postgresql')
+    performance_metrics = calculate_performance_metrics(sql_query, tables, indexes, 'postgresql', explain_plan, [r for r in recommendations if r.get('actionable')])
+    fts_index_recs = recommend_indexes_for_fts_tables(sql_query, indexes, alias_to_table, tables, explain_plan, 'postgresql')
     for rec in fts_index_recs:
         if rec['key'] not in [r['key'] for r in recommendations if isinstance(r, dict) and 'key' in r]:
             recommendations.append(rec)
-    return {
+    
+    # Create initial analysis result
+    analysis_result = {
         'engine': 'PostgreSQL',
         'summary': summary,
         'recommendations': recommendations,
@@ -701,11 +497,16 @@ def analyze_postgresql(sql_query, tables, indexes, explain_plan=None):
         'performance_score': performance_score,
         'performance_metrics': performance_metrics
     }
+    
+    # Enhance analysis with execution plan insights if available
+    if execution_tree:
+        analysis_result = enhance_analysis_with_execution_plan(analysis_result, execution_tree, 'postgresql')
+    
+    return analysis_result
 
 def analyze_sqlserver(sql_query, tables, indexes, explain_plan=None):
     import re
     import sqlparse
-    from explain_keywords import EXPLAIN_KEYWORDS
     recommendations = []
     warnings = []
     optimized_query = None
@@ -725,113 +526,67 @@ def analyze_sqlserver(sql_query, tables, indexes, explain_plan=None):
             'warnings': warnings,
             'engine_mismatch': True
         }
-    
-    # FIXED: Strip hints before parsing SQL
-    sql_for_analysis = sql_query
-    # Remove any /* ... */ comments including hints
-    sql_for_analysis = re.sub(r'/\*.*?\*/', '', sql_query, flags=re.DOTALL | re.IGNORECASE)
-    
-    if re.search(r'SELECT\s+\*', sql_for_analysis, re.IGNORECASE):
+    if re.search(r'SELECT\s+\*', sql_query, re.IGNORECASE):
         recommendations.append({
             'text': "Replace SELECT * with explicit column names for better performance and maintainability.",
             'actionable': True, 'sub': [], 'key': ('query', 'select_star')
         })
         warnings.append("Avoid using SELECT *. Specify only the columns you need for better performance and maintainability.")
-        optimized_query = re.sub(r'SELECT\s+\*', 'SELECT <columns>', sql_for_analysis, flags=re.IGNORECASE)
-        summary.append("SELECT * detected")
-    # Improved JOIN/ON detection using sqlparse
-    parsed = sqlparse.parse(sql_for_analysis)
-    lines = sql_for_analysis.splitlines()
+        optimized_query = re.sub(r'SELECT\s+\*', 'SELECT <columns>', sql_query, flags=re.IGNORECASE)
+        summary.append("Query uses SELECT *.")
+    parsed = sqlparse.parse(sql_query)
+    lines = sql_query.splitlines()
     for stmt in parsed:
         tokens = list(stmt.flatten())
         join_indices = [i for i, t in enumerate(tokens) if t.match(sqlparse.tokens.Keyword, 'JOIN', regex=False)]
         for idx in join_indices:
-            # Find the actual table name after JOIN, skipping SQL keywords
-            table_name = '(unknown)'
-            lineno = '?'
-            
-            # Look for table name after JOIN, skipping SQL keywords
-            for i in range(idx + 1, min(idx + 5, len(tokens))):
-                token = tokens[i]
-                if token.is_whitespace:
-                    continue
-                if token.match(sqlparse.tokens.Keyword, ['ON', 'USING', 'NATURAL'], regex=False):
+            table_token = tokens[idx + 1] if idx + 1 < len(tokens) else None
+            table_name = table_token.value if table_token and table_token.value.strip() else '(unknown)'
+            for lineno, line in enumerate(lines, 1):
+                if table_name in line and 'JOIN' in line.upper():
                     break
-                if token.ttype in [sqlparse.tokens.Name, sqlparse.tokens.Name.Placeholder]:
-                    table_name = token.value.strip()
-                    # Find line number
-                    for line_num, line in enumerate(lines, 1):
-                        if table_name in line and 'JOIN' in line.upper():
-                            lineno = line_num
-                            break
+            else:
+                lineno = '?'
+            has_on = False
+            for t in tokens[idx+2:idx+6]:
+                if t.match(sqlparse.tokens.Keyword, 'ON', regex=False):
+                    has_on = True
                     break
-            
-            # Check if ON clause exists using helper function
-            has_on = check_join_on_clause(tokens, idx)
-            
-            if not has_on and table_name != '(unknown)':
+            if not has_on:
                 warn_msg = f"JOIN without ON clause for table {table_name} (line {lineno})"
-                recommendations.append({'text': f"Add an ON clause to the JOIN for table {table_name} (line {lineno}) to avoid cartesian products and improve performance.", 'actionable': True, 'sub': [], 'key': ('join', table_name, lineno)})
+                recommendations.append({
+                    'text': f"Add an ON clause to the JOIN for table {table_name} (line {lineno}) to avoid cartesian products and improve performance.",
+                    'actionable': True, 'sub': [], 'key': ('join', table_name, lineno)
+                })
                 warnings.append(warn_msg)
-                summary.append("JOIN clauses missing ON conditions")
-    if re.search(r'FROM\s*\(\s*SELECT', sql_for_analysis, re.IGNORECASE):
+                summary.append(warn_msg)
+    if re.search(r'FROM\s*\(\s*SELECT', sql_query, re.IGNORECASE):
         recommendations.append({
             'text': "Consider rewriting subqueries in FROM clause as JOINs for better performance and readability.",
             'actionable': True, 'sub': [], 'key': ('query', 'subquery_to_join')
         })
         summary.append("Query uses subquery in FROM clause.")
-    recommendations.extend(get_real_column_index_recommendations(sql_for_analysis, indexes, alias_to_table, tables))
-    # FTS table summary and recommendations
-    fts_tables = extract_fts_tables_from_explain(explain_plan, 'sqlserver') if explain_plan else set()
-    if fts_tables:
-        summary.append(f"Full Table Scan detected on: {', '.join(sorted(fts_tables))}")
-        # Don't add generic FTS warnings - specific recommendations will handle this
-    # Only show 'No indexes provided' if no actionable FTS/index recommendations exist
-    actionable_recs = [r for r in recommendations if r.get('actionable')]
-    if not indexes and not actionable_recs:
-        recommendations.append({'text': "No indexes provided. Consider adding indexes on columns used in WHERE, JOIN, and ORDER BY clauses.", 'actionable': False, 'sub': [], 'key': ('index', 'none', 'none')})
-    
-    # Add recommendation to use Compare SQL feature for testing alternatives
-    if actionable_recs:
+    recommendations.extend(get_real_column_index_recommendations(sql_query, indexes, alias_to_table, tables))
+    if not indexes:
         recommendations.append({
-            'text': "💡 Use the Compare SQL feature to test different optimization approaches and see performance differences side-by-side.",
-            'actionable': False, 'sub': [], 'key': ('feature', 'compare_sql')
+            'text': "No indexes provided. Consider adding indexes on columns used in WHERE, JOIN, and ORDER BY clauses.",
+            'actionable': False, 'sub': [], 'key': ('index', 'none', 'none')
         })
-    # Deduplicate recommendations
-    seen = set()
-    deduped_recs = []
-    for rec in recommendations:
-        key = rec['key'] if isinstance(rec, dict) and 'key' in rec else rec
-        if key not in seen:
-            deduped_recs.append(rec)
-            seen.add(key)
-    deduped_recs.sort(key=lambda r: not (isinstance(r, dict) and r.get('actionable')))
-    recommendations = deduped_recs
-    warnings = list(dict.fromkeys(warnings))
-    summary = list(dict.fromkeys(summary))
-    if not recommendations:
-        recommendations = [{'text': 'No actionable recommendations 🎉', 'actionable': False, 'sub': [], 'key': ('none',)}]
-    if not summary:
-        summary = ['No summary available for this query.']
-    actionable_keys_count = 0
-    if recommendations and isinstance(recommendations[0], dict):
-        actionable_keys = set(r['key'] for r in recommendations if r.get('actionable'))
-        actionable_keys_count = len(actionable_keys)
-    performance_score = calculate_performance_score(sql_for_analysis, tables, indexes, warnings, actionable_keys_count, explain_plan, db_engine='sqlserver')
-    performance_metrics = calculate_performance_metrics(sql_for_analysis, tables, indexes, 'sqlserver', explain_plan, [r for r in recommendations if r.get('actionable')])
+    performance_score = calculate_performance_score(sql_query, tables, indexes, warnings, len([r for r in recommendations if r.get('actionable')]), explain_plan)
+    performance_metrics = calculate_performance_metrics(sql_query, tables, indexes, 'sqlserver')
+    if explain_plan:
+        keywords = EXPLAIN_KEYWORDS['sqlserver']
+        if any(kw in explain_plan for kw in keywords.get('sequential', []) + keywords.get('table', []) + keywords.get('full_scan', []) + keywords.get('scan', [])):
+            recommendations.append({'text': "EXPLAIN plan shows a Table Scan. Consider adding indexes or rewriting the query to enable index usage.", 'actionable': True, 'sub': [], 'key': ('scan',)})
+            summary.append("Table Scan detected in EXPLAIN plan.")
     # FTS index recommendations
-    fts_index_recs = recommend_indexes_for_fts_tables(sql_for_analysis, indexes, alias_to_table, tables, explain_plan, 'sqlserver')
-    
-    # Remove any generic FTS review recommendations that will be replaced by specific ones
-    recommendations = [rec for rec in recommendations if not (rec.get('key') and rec['key'][0] == 'fts_review')]
-    
-    # Add enhanced FTS recommendations
+    fts_index_recs = recommend_indexes_for_fts_tables(sql_query, indexes, alias_to_table, tables, explain_plan, 'sqlserver')
     for rec in fts_index_recs:
         if rec['key'] not in [r['key'] for r in recommendations if isinstance(r, dict) and 'key' in r]:
             recommendations.append(rec)
     return {
         'engine': 'SQL Server',
-        'summary': summary,
+        'summary': summary or ['SQL Server-specific analysis will appear here.'],
         'recommendations': recommendations,
         'warnings': warnings,
         'optimized_query': optimized_query,
@@ -863,80 +618,54 @@ def analyze_oracle(sql_query, tables, indexes, explain_plan=None):
             'warnings': warnings,
             'engine_mismatch': True
         }
-    
-    # FIXED: Strip Oracle hints before parsing SQL
-    sql_for_analysis = sql_query
-    # Remove Oracle hints /*+ ... */ from the SQL before analysis
-    sql_for_analysis = re.sub(r'/\*\+.*?\*/', '', sql_query, flags=re.DOTALL | re.IGNORECASE)
-    # Also remove any remaining /* ... */ comments
-    sql_for_analysis = re.sub(r'/\*.*?\*/', '', sql_for_analysis, flags=re.DOTALL | re.IGNORECASE)
-    
-    if re.search(r'SELECT\s+\*', sql_for_analysis, re.IGNORECASE):
+    if re.search(r'SELECT\s+\*', sql_query, re.IGNORECASE):
         recommendations.append({
             'text': "Replace SELECT * with explicit column names for better performance and maintainability.",
             'actionable': True, 'sub': [], 'key': ('query', 'select_star')
         })
         warnings.append("Avoid using SELECT *. Specify only the columns you need for better performance and maintainability.")
-        optimized_query = re.sub(r'SELECT\s+\*', 'SELECT <columns>', sql_for_analysis, flags=re.IGNORECASE)
-        summary.append("SELECT * detected")
-    # Improved JOIN/ON detection using sqlparse
-    parsed = sqlparse.parse(sql_for_analysis)
-    lines = sql_for_analysis.splitlines()
-    for stmt in parsed:
-        tokens = list(stmt.flatten())
-        join_indices = [i for i, t in enumerate(tokens) if t.match(sqlparse.tokens.Keyword, 'JOIN', regex=False)]
-        for idx in join_indices:
-            # Find the actual table name after JOIN, skipping SQL keywords
-            table_name = '(unknown)'
-            lineno = '?'
-            
-            # Look for table name after JOIN, skipping SQL keywords
-            for i in range(idx + 1, min(idx + 5, len(tokens))):
-                token = tokens[i]
-                if token.is_whitespace:
-                    continue
-                if token.match(sqlparse.tokens.Keyword, ['ON', 'USING', 'NATURAL'], regex=False):
-                    break
-                if token.ttype in [sqlparse.tokens.Name, sqlparse.tokens.Name.Placeholder]:
-                    table_name = token.value.strip()
-                    # Find line number
-                    for line_num, line in enumerate(lines, 1):
-                        if table_name in line and 'JOIN' in line.upper():
-                            lineno = line_num
-                            break
-                    break
-            
-            # Check if ON clause exists using helper function
-            has_on = check_join_on_clause(tokens, idx)
-            
-            if not has_on and table_name != '(unknown)':
-                warn_msg = f"JOIN without ON clause for table {table_name} (line {lineno})"
-                recommendations.append({'text': f"Add an ON clause to the JOIN for table {table_name} (line {lineno}) to avoid cartesian products and improve performance.", 'actionable': True, 'sub': [], 'key': ('join', table_name, lineno)})
-                warnings.append(warn_msg)
-                summary.append("JOIN clauses missing ON conditions")
-    if re.search(r'FROM\s*\(\s*SELECT', sql_for_analysis, re.IGNORECASE):
+        optimized_query = re.sub(r'SELECT\s+\*', 'SELECT <columns>', sql_query, flags=re.IGNORECASE)
+        summary.append("Query uses SELECT *; consider selecting only needed columns.")
+    # Improved JOIN/ON detection: only warn if a JOIN truly lacks an ON clause
+    join_pattern = re.compile(r'JOIN\s+([\w\.]+)?', re.IGNORECASE)
+    join_matches = list(join_pattern.finditer(sql_query))
+    on_pattern = re.compile(r'ON\s+[^\n]+', re.IGNORECASE)
+    if join_matches:
+        for i, jm in enumerate(join_matches):
+            join_start = jm.end()
+            join_end = join_matches[i+1].start() if i+1 < len(join_matches) else len(sql_query)
+            join_block = sql_query[join_start:join_end]
+            if not on_pattern.search(join_block):
+                table_name = jm.group(1) if jm.group(1) else None
+                if table_name:
+                    warn_msg = f"JOIN without ON clause for table {table_name}"
+                    if warn_msg not in warnings:
+                        warnings.append(warn_msg)
+                        summary.append(warn_msg)
+                        recommendations.append({'text': f"Add an ON clause to the JOIN for table {table_name} to avoid cartesian products and improve performance.", 'actionable': True, 'sub': [], 'key': ('join', table_name)})
+                else:
+                    warn_msg = "JOIN without ON clause detected"
+                    if warn_msg not in warnings:
+                        warnings.append(warn_msg)
+                        summary.append(warn_msg)
+                        recommendations.append({'text': "Add ON clauses to all JOINs to avoid cartesian products and improve performance.", 'actionable': True, 'sub': [], 'key': ('join', 'generic')})
+    if re.search(r'FROM\s*\(\s*SELECT', sql_query, re.IGNORECASE):
         recommendations.append({
             'text': "Consider rewriting subqueries in FROM clause as JOINs for better performance and readability.",
             'actionable': True, 'sub': [], 'key': ('query', 'subquery_to_join')
         })
         summary.append("Query uses subquery in FROM clause.")
-    recommendations.extend(get_real_column_index_recommendations(sql_for_analysis, indexes, alias_to_table, tables))
+    recommendations.extend(get_real_column_index_recommendations(sql_query, indexes, alias_to_table, tables))
     # FTS table summary and recommendations
     fts_tables = extract_fts_tables_from_explain(explain_plan, 'oracle') if explain_plan else set()
     if fts_tables:
         summary.append(f"Full Table Scan detected on: {', '.join(sorted(fts_tables))}")
-        # Don't add generic FTS warnings - specific recommendations will handle this
+        for fts_table in fts_tables:
+            recommendations.append({'text': f"Table '{fts_table}' is accessed via Full Table Scan. Review for possible indexing or query rewrite.", 'actionable': True, 'sub': [], 'key': ('fts_review', fts_table)})
     # Only show 'No indexes provided' if no actionable FTS/index recommendations exist
     actionable_recs = [r for r in recommendations if r.get('actionable')]
     if not indexes and not actionable_recs:
         recommendations.append({'text': "No indexes provided. Consider adding indexes on columns used in WHERE, JOIN, and ORDER BY clauses.", 'actionable': False, 'sub': [], 'key': ('index', 'none', 'none')})
-    
-    # Add recommendation to use Compare SQL feature for testing alternatives
-    if actionable_recs:
-        recommendations.append({
-            'text': "💡 Use the Compare SQL feature to test different optimization approaches and see performance differences side-by-side.",
-            'actionable': False, 'sub': [], 'key': ('feature', 'compare_sql')
-        })
     # Deduplicate recommendations
     seen = set()
     deduped_recs = []
@@ -957,15 +686,10 @@ def analyze_oracle(sql_query, tables, indexes, explain_plan=None):
     if recommendations and isinstance(recommendations[0], dict):
         actionable_keys = set(r['key'] for r in recommendations if r.get('actionable'))
         actionable_keys_count = len(actionable_keys)
-    performance_score = calculate_performance_score(sql_for_analysis, tables, indexes, warnings, actionable_keys_count, explain_plan, db_engine='oracle')
-    performance_metrics = calculate_performance_metrics(sql_for_analysis, tables, indexes, 'oracle', explain_plan, [r for r in recommendations if r.get('actionable')])
+    performance_score = calculate_performance_score(sql_query, tables, indexes, warnings, actionable_keys_count, explain_plan, db_engine='oracle')
+    performance_metrics = calculate_performance_metrics(sql_query, tables, indexes, 'oracle', explain_plan, [r for r in recommendations if r.get('actionable')])
     # FTS index recommendations
-    fts_index_recs = recommend_indexes_for_fts_tables(sql_for_analysis, indexes, alias_to_table, tables, explain_plan, 'oracle')
-    
-    # Remove any generic FTS review recommendations that will be replaced by specific ones
-    recommendations = [rec for rec in recommendations if not (rec.get('key') and rec['key'][0] == 'fts_review')]
-    
-    # Add enhanced FTS recommendations
+    fts_index_recs = recommend_indexes_for_fts_tables(sql_query, indexes, alias_to_table, tables, explain_plan, 'oracle')
     for rec in fts_index_recs:
         if rec['key'] not in [r['key'] for r in recommendations if isinstance(r, dict) and 'key' in r]:
             recommendations.append(rec)
@@ -1747,18 +1471,21 @@ def beautify_sql():
     except Exception as e:
         return jsonify({'error': 'Invalid request or JSON: ' + str(e)}), 400
 
-
+def parse_explain_to_json(explain_plan, db_engine):
+    if not explain_plan:
+        return None
+    
+    if db_engine == 'postgresql':
+        return parse_postgresql_explain_flow(explain_plan)
+    elif db_engine == 'oracle':
+        return parse_oracle_explain_flow(explain_plan)
+    elif db_engine == 'sqlserver':
+        return parse_sqlserver_explain_flow(explain_plan)
+    return None
 
 def parse_postgresql_explain_flow(explain_plan):
     """Parse PostgreSQL EXPLAIN plan to show actual execution flow"""
-    import re
-    
-    # FIXED: Strip hints from the explain plan before parsing
-    cleaned_plan = explain_plan
-    # Remove any /* ... */ comments including hints
-    cleaned_plan = re.sub(r'/\*.*?\*/', '', explain_plan, flags=re.DOTALL | re.IGNORECASE)
-    
-    lines = cleaned_plan.strip().split('\n')
+    lines = explain_plan.strip().split('\n')
     
     # Skip header lines
     skip_patterns = ['Planning Time:', 'Execution Time:', 'QUERY PLAN', '---']
@@ -1829,16 +1556,7 @@ def parse_postgresql_explain_flow(explain_plan):
 
 def parse_oracle_explain_flow(explain_plan):
     """Parse Oracle EXPLAIN PLAN output with enhanced format support"""
-    import re
-    
-    # FIXED: Strip Oracle hints from the explain plan before parsing
-    cleaned_plan = explain_plan
-    # Remove Oracle hints /*+ ... */ from the explain plan
-    cleaned_plan = re.sub(r'/\*\+.*?\*/', '', explain_plan, flags=re.DOTALL | re.IGNORECASE)
-    # Also remove any remaining /* ... */ comments
-    cleaned_plan = re.sub(r'/\*.*?\*/', '', cleaned_plan, flags=re.DOTALL | re.IGNORECASE)
-    
-    lines = cleaned_plan.strip().split('\n')
+    lines = explain_plan.strip().split('\n')
     
     # Skip header lines
     skip_patterns = ['---', 'Execution Plan', 'Plan hash value', 'Note']
@@ -1868,7 +1586,7 @@ def parse_oracle_explain_flow(explain_plan):
         return parse_oracle_tree_format(filtered_lines, execution_tree)
 
 def parse_oracle_pipe_format(lines, execution_tree):
-    """Parse Oracle pipe-delimited format with improved hierarchy building"""
+    """Parse Oracle pipe-delimited format"""
     # Skip header lines and empty lines
     data_lines = []
     for line in lines:
@@ -1913,12 +1631,12 @@ def parse_oracle_pipe_format(lines, execution_tree):
                 print(f"Error parsing Oracle line: {line}, error: {e}")
                 continue
     
-    # Build hierarchy using a simpler approach based on ID relationships
-    result = build_oracle_hierarchy_simple(nodes, execution_tree)
+    # Build hierarchy based on ID relationships
+    result = build_oracle_hierarchy_improved(nodes, execution_tree)
     return result
 
-def build_oracle_hierarchy_simple(nodes, execution_tree):
-    """Build Oracle hierarchy using a simple ID-based approach"""
+def build_oracle_hierarchy_improved(nodes, execution_tree):
+    """Build Oracle hierarchy based on ID relationships with improved logic"""
     if not nodes:
         return execution_tree
     
@@ -1929,10 +1647,8 @@ def build_oracle_hierarchy_simple(nodes, execution_tree):
     node_map = {node['id']: node for node in nodes}
     
     # Build the tree based on Oracle execution plan structure
-    # Oracle plans typically have a hierarchical structure where:
-    # - ID 0 is the root (SELECT STATEMENT)
-    # - Higher IDs are children of lower IDs
-    # - We'll build it by finding the immediate children of each node
+    # Oracle plans typically have a hierarchical structure where each node can have multiple children
+    # We'll build it by finding the parent-child relationships based on operation types
     
     # Start with the root node (ID 0)
     root_node = None
@@ -1946,14 +1662,59 @@ def build_oracle_hierarchy_simple(nodes, execution_tree):
         root_node = nodes[0] if nodes else None
     
     if root_node:
-        # Build the tree recursively
-        tree_node = build_oracle_tree_by_id(root_node, nodes, node_map, set())
+        tree_node = build_oracle_tree_simple(root_node, nodes, node_map, set())
         execution_tree['children'].append(tree_node)
     
     return execution_tree
     
-def build_oracle_tree_by_id(current_node, all_nodes, node_map, processed_ids):
-    """Build Oracle tree based on ID relationships"""
+    return execution_tree
+
+def build_oracle_tree_simple(current_node, all_nodes, node_map, processed_ids):
+    """Build Oracle tree using a proper hierarchical approach"""
+    tree_node = {
+        'operation': current_node['operation'],
+        'cost': current_node['cost'],
+        'rows': current_node['rows'],
+        'time': 0,
+        'buffers': {},
+        'children': []
+    }
+    
+    # Mark this node as processed
+    processed_ids.add(current_node['id'])
+    
+    # Find all potential children for this node
+    children = []
+    
+    # Look for nodes that could be children of this operation
+    for node in all_nodes:
+        if node['id'] in processed_ids:
+            continue
+            
+        # Check if this node could be a child based on operation relationships
+        if is_oracle_child_operation(current_node['operation'].lower(), node['operation'].lower()):
+            # Check if there are any unprocessed nodes with IDs between current and this candidate
+            # that could also be children of the current node
+            has_conflict = False
+            for other_node in all_nodes:
+                if (other_node['id'] not in processed_ids and 
+                    current_node['id'] < other_node['id'] < node['id'] and
+                    is_oracle_child_operation(current_node['operation'].lower(), other_node['operation'].lower())):
+                    has_conflict = True
+                    break
+            
+            if not has_conflict:
+                children.append(node)
+    
+    # Recursively build children
+    for child_node in children:
+        child_tree = build_oracle_tree_simple(child_node, all_nodes, node_map, processed_ids)
+        tree_node['children'].append(child_tree)
+    
+    return tree_node
+
+def build_oracle_tree_recursive(current_node, all_nodes, node_map, processed_ids):
+    """Build Oracle tree recursively based on operation relationships"""
     tree_node = {
         'operation': current_node['operation'],
         'cost': current_node['cost'],
@@ -1967,72 +1728,75 @@ def build_oracle_tree_by_id(current_node, all_nodes, node_map, processed_ids):
     processed_ids.add(current_node['id'])
     
     # Find children for this node
-    # In Oracle, children typically have higher IDs and are related to the parent
-    children = []
-    current_id = current_node['id']
-    
-    # Look for potential children with higher IDs
-    for node in all_nodes:
-        if node['id'] in processed_ids or node['id'] <= current_id:
-            continue
-            
-        # Check if this could be a direct child
-        # In Oracle, children are typically the next operations in the execution flow
-        if is_oracle_direct_child(current_node['operation'], node['operation'], current_id, node['id']):
-                children.append(node)
-    
-    # Sort children by ID to maintain order
-    children.sort(key=lambda x: x['id'])
+    children = find_oracle_children(current_node, all_nodes, node_map, processed_ids)
     
     # Recursively build children
     for child_node in children:
-        child_tree = build_oracle_tree_by_id(child_node, all_nodes, node_map, processed_ids)
+        child_tree = build_oracle_tree_recursive(child_node, all_nodes, node_map, processed_ids)
         tree_node['children'].append(child_tree)
     
     return tree_node
 
-def is_oracle_direct_child(parent_op, child_op, parent_id, child_id):
-    """Determine if child_op is a direct child of parent_op in Oracle"""
-    # Simple heuristics for Oracle parent-child relationships
-    parent_lower = parent_op.lower()
-    child_lower = child_op.lower()
+def find_oracle_children(parent_node, all_nodes, node_map, processed_ids):
+    """Find children for a given Oracle node based on operation relationships"""
+    children = []
+    parent_id = parent_node['id']
+    parent_op = parent_node['operation'].lower()
     
-    # Common parent-child relationships in Oracle
-    relationships = [
-        ('select statement', 'temp table transformation'),
-        ('select statement', 'sort order by'),
-        ('select statement', 'hash unique'),
-        ('select statement', 'nested loops'),
-        ('select statement', 'view'),
-        ('temp table transformation', 'load as select'),
-        ('load as select', 'table access'),
-        ('load as select', 'domain index'),
-        ('sort order by', 'hash unique'),
-        ('hash unique', 'nested loops'),
-        ('nested loops', 'view'),
-        ('view', 'sort unique'),
-        ('sort unique', 'union-all'),
-        ('union-all', 'view'),
-        ('union-all', 'nested loops'),
-        ('view', 'table access'),
-        ('view', 'collection iterator'),
-        ('nested loops', 'collection iterator'),
-        ('collection iterator', 'view'),
-        ('view', 'sort unique'),
-        ('sort unique', 'union-all'),
-        ('union-all', 'view'),
-        ('view', 'table access')
-    ]
+    # Look for potential children
+    for node in all_nodes:
+        if node['id'] in processed_ids:
+            continue
+            
+        child_op = node['operation'].lower()
+        
+        # Check if this node could be a child based on operation relationships
+        if is_oracle_child_operation(parent_op, child_op):
+            # Check if there are any unprocessed nodes with IDs between parent and this candidate
+            # that could also be children of the parent
+            has_conflict = False
+            for other_node in all_nodes:
+                if (other_node['id'] not in processed_ids and 
+                    parent_id < other_node['id'] < node['id'] and
+                    is_oracle_child_operation(parent_op, other_node['operation'].lower())):
+                    has_conflict = True
+                    break
+            
+            if not has_conflict:
+                children.append(node)
     
-    for parent, child in relationships:
-        if parent in parent_lower and child in child_lower:
-            return True
+    return children
+
+def build_oracle_node_tree_improved(node, node_map, processed_ids):
+    """Recursively build Oracle node tree with improved child detection"""
+    tree_node = {
+        'operation': node['operation'],
+        'cost': node['cost'],
+        'rows': node['rows'],
+        'time': 0,  # Oracle doesn't provide time in explain plan
+        'buffers': {},
+        'children': []
+    }
     
-    # Additional heuristic: if the child ID is close to parent ID (within reasonable range)
-    if child_id - parent_id <= 5:  # Allow some flexibility
-        return True
+    # Mark this node as processed
+    processed_ids.add(node['id'])
     
-    return False
+    # Find immediate children based on Oracle execution plan structure
+    # In Oracle, children typically have higher IDs and are executed as part of the parent
+    children = []
+    
+    # Look for nodes with higher IDs that haven't been processed
+    for other_id, other_node in node_map.items():
+        if other_id > node['id'] and other_id not in processed_ids:
+            # For Oracle, we'll use a simpler approach: find the next unprocessed node
+            # This works because Oracle execution plans are typically sequential
+            child_tree = build_oracle_node_tree_improved(other_node, node_map, processed_ids)
+            children.append(child_tree)
+            # Only process the first child to avoid creating multiple branches
+            break
+    
+    tree_node['children'] = children
+    return tree_node
 
 def parse_oracle_tree_format(lines, execution_tree):
     """Parse Oracle tree format"""
@@ -2299,14 +2063,7 @@ def is_oracle_child_operation(parent_op, child_op):
 
 def parse_sqlserver_explain_flow(explain_plan):
     """Parse SQL Server EXPLAIN PLAN output with enhanced format support"""
-    import re
-    
-    # FIXED: Strip hints from the explain plan before parsing
-    cleaned_plan = explain_plan
-    # Remove any /* ... */ comments including hints
-    cleaned_plan = re.sub(r'/\*.*?\*/', '', explain_plan, flags=re.DOTALL | re.IGNORECASE)
-    
-    lines = cleaned_plan.strip().split('\n')
+    lines = explain_plan.strip().split('\n')
     
     # Check for table format (StmtText, PhysicalOp, etc.)
     if any('StmtText' in line for line in lines[:5]) or any('PhysicalOp' in line for line in lines[:5]):
@@ -2325,8 +2082,8 @@ def parse_sqlserver_explain_flow(explain_plan):
         return parse_sqlserver_tree_format(lines, execution_tree)
     
     # Check for XML format
-    if cleaned_plan.strip().startswith('<ShowPlanXML'):
-        return parse_sqlserver_xml(cleaned_plan)
+    if explain_plan.strip().startswith('<ShowPlanXML'):
+        return parse_sqlserver_xml(explain_plan)
     
     # Generic format fallback
     return parse_sqlserver_generic_format(lines)
@@ -2636,12 +2393,6 @@ def generate_explain_visualization():
             # Generate optimization recommendations from execution plan
             plan_summary, plan_recommendations, plan_warnings = generate_optimization_summary(json_tree, db_engine)
             
-            # Extract performance metrics from explain plan
-            plan_metrics = extract_explain_plan_metrics(explain_plan, db_engine) if explain_plan else {}
-            
-            # Calculate comprehensive statistics similar to explain.depesz.com
-            plan_statistics = calculate_explain_statistics(json_tree, db_engine) if json_tree else {}
-            
             return jsonify({
                 'success': True,
                 'json_tree': json_tree,
@@ -2649,8 +2400,6 @@ def generate_explain_visualization():
                 'plan_summary': plan_summary,
                 'plan_recommendations': plan_recommendations,
                 'plan_warnings': plan_warnings,
-                'plan_metrics': plan_metrics,
-                'plan_statistics': plan_statistics,
                 'message': f'Visualization data generated successfully (detected format: {detected_format})'
             })
         else:
@@ -2664,211 +2413,6 @@ def generate_explain_visualization():
             'success': False,
             'error': f'Error generating visualization data: {str(e)}'
         }), 500
-
-def calculate_explain_statistics(json_tree, db_engine):
-    """
-    Calculate comprehensive statistics from explain plan similar to explain.depesz.com
-    Returns I/O stats, per node type stats, and per table stats
-    Enhanced to work with all database engines (PostgreSQL, Oracle, SQL Server)
-    """
-    if not json_tree:
-        return {}
-    
-    # Handle case where json_tree might be a string (JSON string)
-    if isinstance(json_tree, str):
-        try:
-            import json
-            json_tree = json.loads(json_tree)
-        except (json.JSONDecodeError, TypeError):
-            return {}
-    
-    # Ensure json_tree is a dictionary/object
-    if not isinstance(json_tree, dict):
-        return {}
-    
-
-    
-    def traverse_nodes(node, stats):
-        """Recursively traverse nodes to collect statistics"""
-        if not node or not isinstance(node, dict):
-            return
-        
-        # Extract node information with safe defaults - enhanced for all database engines
-        operation = node.get('operation', '')
-        table_name = node.get('table_name', '')
-        
-        # Handle different cost/time formats across database engines
-        cost = 0
-        if node.get('cost') is not None:
-            try:
-                cost = float(node.get('cost'))
-            except (ValueError, TypeError):
-                cost = 0
-        
-        time = 0
-        if node.get('time') is not None:
-            try:
-                time = float(node.get('time'))
-            except (ValueError, TypeError):
-                time = 0
-        
-        rows = 0
-        if node.get('rows') is not None:
-            try:
-                rows = int(node.get('rows'))
-            except (ValueError, TypeError):
-                rows = 0
-        
-        buffers = node.get('buffers', {}) if isinstance(node.get('buffers'), dict) else {}
-        
-        # Node type statistics
-        if operation:
-            if operation not in stats['node_types']:
-                stats['node_types'][operation] = {'count': 0, 'total_time': 0, 'total_cost': 0}
-            stats['node_types'][operation]['count'] += 1
-            stats['node_types'][operation]['total_time'] += time
-            stats['node_types'][operation]['total_cost'] += cost
-        
-        # Table statistics
-        if table_name:
-            if table_name not in stats['tables']:
-                stats['tables'][table_name] = {
-                    'scan_count': 0,
-                    'total_time': 0,
-                    'scan_types': {}
-                }
-            stats['tables'][table_name]['scan_count'] += 1
-            stats['tables'][table_name]['total_time'] += time
-            
-            # Scan type statistics
-            if operation:
-                if operation not in stats['tables'][table_name]['scan_types']:
-                    stats['tables'][table_name]['scan_types'][operation] = {'count': 0, 'total_time': 0}
-                stats['tables'][table_name]['scan_types'][operation]['count'] += 1
-                stats['tables'][table_name]['scan_types'][operation]['total_time'] += time
-        
-        # I/O statistics
-        if buffers:
-            shared_read = buffers.get('shared_read', 0)
-            shared_written = buffers.get('shared_written', 0)
-            shared_dirtied = buffers.get('shared_dirtied', 0)
-            temp_read = buffers.get('temp_read', 0)
-            temp_written = buffers.get('temp_written', 0)
-            
-            stats['io_stats']['shared_read'] += shared_read
-            stats['io_stats']['shared_written'] += shared_written
-            stats['io_stats']['shared_dirtied'] += shared_dirtied
-            stats['io_stats']['temp_read'] += temp_read
-            stats['io_stats']['temp_written'] += temp_written
-        
-        # Total query statistics
-        stats['total_time'] += time
-        stats['total_cost'] += cost
-        stats['total_rows'] += rows
-        
-        # Process children
-        children = node.get('children', [])
-        if isinstance(children, list):
-            for child in children:
-                traverse_nodes(child, stats)
-    
-    # Initialize statistics structure
-    stats = {
-        'node_types': {},
-        'tables': {},
-        'io_stats': {
-            'shared_read': 0,
-            'shared_written': 0,
-            'shared_dirtied': 0,
-            'temp_read': 0,
-            'temp_written': 0
-        },
-        'total_time': 0,
-        'total_cost': 0,
-        'total_rows': 0
-    }
-    
-    # Traverse the tree to collect statistics
-    traverse_nodes(json_tree, stats)
-    
-    # Calculate percentages and format statistics
-    result = {
-        'io_stats': {},
-        'node_type_stats': [],
-        'table_stats': []
-    }
-    
-    # Format I/O statistics - enhanced for all database engines
-    if stats['total_time'] > 0:
-        # Calculate I/O statistics with database engine-specific adjustments
-        total_io_bytes = (stats['io_stats']['shared_read'] + stats['io_stats']['shared_written']) * 8192  # 8KB blocks
-        io_mb = total_io_bytes / (1024 * 1024)
-        io_mbps = io_mb / (stats['total_time'] / 1000) if stats['total_time'] > 0 else 0
-        
-        # Add database engine-specific I/O metrics
-        result['io_stats'] = {
-            'total_io_mb': round(io_mb, 2),
-            'total_time_ms': round(stats['total_time'], 3),
-            'io_throughput_mbps': round(io_mbps, 1),
-            'shared_read_blocks': stats['io_stats']['shared_read'],
-            'shared_written_blocks': stats['io_stats']['shared_written'],
-            'temp_read_blocks': stats['io_stats']['temp_read'],
-            'temp_written_blocks': stats['io_stats']['temp_written'],
-            'database_engine': db_engine,
-            'total_blocks_accessed': stats['io_stats']['shared_read'] + stats['io_stats']['shared_written'],
-            'io_efficiency': round((stats['io_stats']['shared_read'] / max(1, stats['total_rows'])) * 100, 1) if stats['total_rows'] > 0 else 0
-        }
-    
-    # Format node type statistics - enhanced with detailed metrics
-    for node_type, data in stats['node_types'].items():
-        percentage = (data['total_time'] / stats['total_time'] * 100) if stats['total_time'] > 0 else 0
-        cost_percentage = (data['total_cost'] / stats['total_cost'] * 100) if stats['total_cost'] > 0 else 0
-        
-        result['node_type_stats'].append({
-            'node_type': node_type,
-            'count': data['count'],
-            'total_time_ms': round(data['total_time'], 3),
-            'total_cost': round(data['total_cost'], 2),
-            'percentage': round(percentage, 1),
-            'cost_percentage': round(cost_percentage, 1),
-            'avg_time_per_node': round(data['total_time'] / data['count'], 3) if data['count'] > 0 else 0,
-            'avg_cost_per_node': round(data['total_cost'] / data['count'], 2) if data['count'] > 0 else 0
-        })
-    
-    # Sort node type stats by total time (descending)
-    result['node_type_stats'].sort(key=lambda x: x['total_time_ms'], reverse=True)
-    
-    # Format table statistics
-    for table_name, data in stats['tables'].items():
-        table_percentage = (data['total_time'] / stats['total_time'] * 100) if stats['total_time'] > 0 else 0
-        scan_types = []
-        
-        for scan_type, scan_data in data['scan_types'].items():
-            scan_percentage = (scan_data['total_time'] / data['total_time'] * 100) if data['total_time'] > 0 else 0
-            scan_types.append({
-                'scan_type': scan_type,
-                'count': scan_data['count'],
-                'total_time_ms': round(scan_data['total_time'], 3),
-                'percentage': round(scan_percentage, 1)
-            })
-        
-        # Sort scan types by total time (descending)
-        scan_types.sort(key=lambda x: x['total_time_ms'], reverse=True)
-        
-        result['table_stats'].append({
-            'table_name': table_name,
-            'scan_count': data['scan_count'],
-            'total_time_ms': round(data['total_time'], 3),
-            'percentage': round(table_percentage, 1),
-            'scan_types': scan_types,
-            'avg_time_per_scan': round(data['total_time'] / data['scan_count'], 3) if data['scan_count'] > 0 else 0,
-            'scan_efficiency': round((data['scan_count'] / max(1, len(data['scan_types']))) * 100, 1) if data['scan_types'] else 0
-        })
-    
-    # Sort table stats by total time (descending)
-    result['table_stats'].sort(key=lambda x: x['total_time_ms'], reverse=True)
-    
-    return result
 
 def parse_explain_plan_to_mermaid(explain_plan, db_engine='postgresql'):
     """
@@ -3170,8 +2714,8 @@ def get_real_column_index_recommendations(sql_query, indexes, alias_to_table, ta
         if col and '.' in col:
             alias, column = col.split('.', 1)
             real_table = alias_to_table.get(alias, alias)
-            # Check if real_table is in tables (tables is a dict, not list)
-            if real_table not in tables:
+            # Check if real_table is in tables
+            if real_table not in [t['name'] for t in tables]:
                 continue
             # Skip aggregates/aliases
             if re.match(r'\d+$', column) or column.lower() in ['count', 'sum', 'avg', 'min', 'max', 'order_count']:
@@ -3193,93 +2737,40 @@ def extract_fts_tables_from_explain(explain_plan, db_engine):
     """
     Extract all tables accessed via full table scan from the EXPLAIN plan using EXPLAIN_KEYWORDS.
     Returns a set of table names.
-    Enhanced to properly extract table names from various formats.
+    Improved for Oracle: robustly extract table names from lines like 'TABLE ACCESS FULL USERS' and pipe-formatted plans.
     """
     from explain_keywords import EXPLAIN_KEYWORDS
     fts_tables = set()
     if not explain_plan:
         return fts_tables
-    
     # Normalize line endings and strip whitespace
     plan_lines = [l.strip() for l in explain_plan.strip().split('\n') if l.strip()]
     keywords = EXPLAIN_KEYWORDS.get(db_engine, {})
     scan_keywords = set(keywords.get('sequential', []) + keywords.get('table', []) + keywords.get('full_scan', []) + keywords.get('scan', []))
-    
-    # Enhanced filtering to exclude SQL keywords and common non-table terms
-    sql_keywords = {
-        'FULL', 'ACCESS', 'TABLE', 'SCAN', 'INDEX', 'HASH', 'JOIN', 'STATEMENT',
-        'ON', 'WHERE', 'AND', 'OR', 'NOT', 'IN', 'EXISTS', 'BETWEEN', 'LIKE',
-        'GROUP', 'ORDER', 'HAVING', 'UNION', 'INTERSECT', 'EXCEPT', 'DISTINCT',
-        'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'AS', 'IS', 'NULL', 'TRUE', 'FALSE'
-    }
-    
     for line in plan_lines:
-        # PostgreSQL format: "Seq Scan on users (cost=0.00..431.00 rows=21000 width=4)"
-        if db_engine == 'postgresql':
-            # Look for "Seq Scan on table_name" pattern
-            seq_scan_match = re.search(r'Seq Scan on (\w+)', line, re.IGNORECASE)
-            if seq_scan_match:
-                table_name = seq_scan_match.group(1)
-                if table_name and table_name.upper() not in sql_keywords:
-                    fts_tables.add(table_name)
-                    continue
-            
-            # Look for "Index Scan on table_name" but only if it's a full scan
-            index_scan_match = re.search(r'Index Scan on (\w+)', line, re.IGNORECASE)
-            if index_scan_match and 'full' in line.lower():
-                table_name = index_scan_match.group(1)
-                if table_name and table_name.upper() not in sql_keywords:
-                    fts_tables.add(table_name)
-                    continue
-        
         # Oracle pipe format: | 3 | TABLE ACCESS FULL | DEPARTMENTS | 27 | 3 (0) |
-        elif db_engine == 'oracle' and '|' in line:
+        if db_engine == 'oracle' and '|' in line:
             parts = [p.strip() for p in line.strip('|').split('|')]
             if len(parts) >= 3:
                 op = parts[1].upper()
                 table = parts[2]
-                # FIXED: Only detect as FTS if it's actually a full table scan
-                # Oracle's "TABLE ACCESS BY INDEX ROWID" is NOT a full table scan
-                if ('TABLE ACCESS FULL' in op or 'FULL TABLE SCAN' in op) and table and table.upper() not in sql_keywords and table.upper() not in {'', 'N/A', 'VW_SQ_1'}:
+                for kw in scan_keywords:
+                    if kw.upper() in op:
+                        if table and table.upper() not in {'', 'N/A', 'VW_SQ_1'}:
                             fts_tables.add(table)
-                # Explicitly exclude index-based access patterns
-                elif any(index_pattern in op for index_pattern in ['INDEX ROWID', 'INDEX SCAN', 'INDEX UNIQUE SCAN', 'INDEX RANGE SCAN', 'DOMAIN INDEX']):
-                    # This is an index scan, not a full table scan - do nothing
-                    pass
-        
-        # SQL Server format: "Clustered Index Scan (OBJECT:([database].[schema].[table]))"
-        elif db_engine == 'sqlserver':
-            # Look for table names in scan operations
-            scan_match = re.search(r'Scan.*?\[([^\]]+)\]', line, re.IGNORECASE)
-            if scan_match:
-                table_path = scan_match.group(1)
-                # Extract table name from database.schema.table format
-                table_parts = table_path.split('.')
-                if len(table_parts) >= 3:
-                    table_name = table_parts[-1]  # Last part is table name
-                    if table_name and table_name.upper() not in sql_keywords:
-                        fts_tables.add(table_name)
-        
-        # Generic fallback for other engines
         else:
             for kw in scan_keywords:
                 if kw.lower() in line.lower():
-                    # Try to extract table name after the scan keyword
                     m = re.search(rf"{re.escape(kw)}[\s]+([\w\"\[\]]+)", line, re.IGNORECASE)
                     if m:
                         table = m.group(1).replace('"', '').replace('[', '').replace(']', '')
-                        if table.upper() not in sql_keywords and len(table) > 0:
-                            fts_tables.add(table)
+                        fts_tables.add(table)
                     else:
-                        # Fallback: look for words that might be table names
                         parts = line.strip().split()
-                        for i, part in enumerate(parts):
-                            if kw.lower() in part.lower() and i + 1 < len(parts):
-                                potential_table = parts[i + 1]
-                                if potential_table and potential_table.upper() not in sql_keywords and len(potential_table) > 0:
-                                    fts_tables.add(potential_table)
-                                    break
-    
+                        if len(parts) > 0:
+                            table = parts[-1].replace('"', '').replace('[', '').replace(']', '')
+                            if table.upper() not in {'FULL', 'ACCESS', 'TABLE', 'SCAN', 'INDEX', 'HASH', 'JOIN', 'STATEMENT'}:
+                                fts_tables.add(table)
     return fts_tables
 
 # In each analyze_* function, after parsing the EXPLAIN plan:
@@ -3358,83 +2849,17 @@ def extract_explain_plan_metrics(explain_plan, db_engine):
                 metrics['cost'] = (metrics['cost'] or 0) + 10
         # MySQL EXPLAIN rarely gives memory/time directly
     elif db_engine == 'oracle':
-        # Enhanced Oracle parsing for pipe-delimited format
-        rows_list, cost_list, bytes_list, time_list = [], [], [], []
-        
+        # Pipe/table or indented
         for line in plan_lines:
-            # Skip header lines and empty lines
-            if not line.strip() or '---' in line or 'Id' in line and 'Operation' in line:
-                continue
-                
-            # Parse pipe-delimited format: | Id | Operation | Name | Rows | Bytes | Cost | Time |
-            if '|' in line:
-                parts = [part.strip() for part in line.split('|')]
-                if len(parts) >= 7:  # Oracle format has at least 7 columns
-                    try:
-                        # Extract Rows (column 4)
-                        if len(parts) > 4 and parts[4].isdigit():
-                            rows_list.append(int(parts[4]))
-                        
-                        # Extract Bytes (column 5)
-                        if len(parts) > 5 and parts[5].isdigit():
-                            bytes_list.append(int(parts[5]))
-                        
-                        # Extract Cost (column 6) - handle format like "3890 (100)"
-                        if len(parts) > 6:
-                            cost_str = parts[6].split()[0] if parts[6] else '0'
-                            if cost_str.replace('.', '').isdigit():
-                                cost_list.append(float(cost_str))
-                        
-                        # Extract Time (column 7) - handle format like "00:00:01"
-                        if len(parts) > 7:
-                            time_str = parts[7].strip()
-                            if time_str and ':' in time_str:
-                                # Convert Oracle time format "HH:MM:SS" to seconds
-                                try:
-                                    time_parts = time_str.split(':')
-                                    if len(time_parts) == 3:
-                                        hours = int(time_parts[0])
-                                        minutes = int(time_parts[1])
-                                        seconds = int(time_parts[2])
-                                        total_seconds = hours * 3600 + minutes * 60 + seconds
-                                        time_list.append(total_seconds)
-                                except (ValueError, IndexError):
-                                    pass
-                    except (ValueError, IndexError):
-                        continue
-            
-            # Also try regex patterns for other formats
-            m = re.search(r'rows=?(\d+)', line, re.IGNORECASE)
+            m = re.search(r'rows=?(\d+)', line)
             if m:
-                rows_list.append(int(m.group(1)))
-            
-            m = re.search(r'cost=?(\d+)', line, re.IGNORECASE)
+                metrics['rows_scanned'] = max(metrics['rows_scanned'] or 0, int(m.group(1))) if metrics['rows_scanned'] else int(m.group(1))
+            m = re.search(r'cost=?(\d+)', line)
             if m:
-                cost_list.append(int(m.group(1)))
-            
-            m = re.search(r'bytes=?(\d+)', line, re.IGNORECASE)
+                metrics['cost'] = max(metrics['cost'] or 0, int(m.group(1))) if metrics['cost'] else int(m.group(1))
+            m = re.search(r'bytes=?(\d+)', line)
             if m:
-                bytes_list.append(int(m.group(1)))
-            
-            # Parse time in format "00:00:01"
-            m = re.search(r'(\d{2}):(\d{2}):(\d{2})', line)
-            if m:
-                hours = int(m.group(1))
-                minutes = int(m.group(2))
-                seconds = int(m.group(3))
-                total_seconds = hours * 3600 + minutes * 60 + seconds
-                time_list.append(total_seconds)
-        
-        # Set metrics from collected data
-        if rows_list:
-            metrics['rows_scanned'] = max(rows_list)
-        if cost_list:
-            metrics['cost'] = max(cost_list)
-        if bytes_list:
-            # Convert bytes to MB for display
-            metrics['memory'] = max(bytes_list) / (1024 * 1024)
-        if time_list:
-            metrics['time'] = max(time_list)
+                metrics['memory'] = max(metrics['memory'] or 0, int(m.group(1))) if metrics['memory'] else int(m.group(1))
     elif db_engine == 'sqlserver':
         for line in plan_lines:
             m = re.search(r'Estimated Rows=?(\d+)', line, re.IGNORECASE)
@@ -3459,20 +2884,8 @@ def parse_user_indexes(indexes):
     Supports multi-column indexes and different syntaxes for all engines.
     """
     table_to_indexed_cols = {}
-    
-    # Handle string input (split by newlines)
-    if isinstance(indexes, str):
-        if not indexes.strip():
-            return table_to_indexed_cols
-        index_lines = [line.strip() for line in indexes.split('\n') if line.strip()]
-    else:
-        index_lines = indexes
-    
-    for idx in index_lines:
-        if isinstance(idx, dict):
-            defn = idx.get('definition') or idx.get('ddl') or ''
-        else:
-            defn = str(idx)
+    for idx in indexes:
+        defn = idx.get('definition') or idx.get('ddl') or ''
         # Try to extract table and columns from CREATE INDEX ... ON table(col1, col2, ...)
         m = re.search(r'CREATE\s+INDEX\s+\w+\s+ON\s+([\w\"\[\]]+)\s*\(([^)]+)\)', defn, re.IGNORECASE)
         if m:
@@ -3499,247 +2912,69 @@ def parse_user_indexes(indexes):
 
 def recommend_indexes_for_fts_tables(sql_query, indexes, alias_to_table, tables, explain_plan, db_engine):
     """
-    For every FTS table detected in the EXPLAIN plan, provide specific, targeted recommendations.
-    Enhanced to avoid repetition and provide precise, actionable guidance.
+    For every FTS table detected in the EXPLAIN plan, recommend an index on the best predicate column (from WHERE/JOIN/ORDER BY),
+    or a review if no predicate is found. If an index exists but FTS still occurs, recommend investigation steps.
+    Never recommend both a new index and investigation for the same table.
     """
     fts_tables = extract_fts_tables_from_explain(explain_plan, db_engine)
     where_cols = set()
     orderby_cols = set()
     join_cols = set()
-    
-    # Extract columns from WHERE clause with more sophisticated parsing
-    where_matches = re.finditer(r'WHERE\s+([^;]+?)(?:\s+(?:GROUP|ORDER|LIMIT|UNION|$))', sql_query, re.IGNORECASE | re.DOTALL)
-    for match in where_matches:
-        where_clause = match.group(1)
-        # Extract column names from WHERE clause - handle complex conditions
-        # Look for table.column patterns in various conditions
-        col_patterns = [
-            r'(\w+\.\w+)\s*[=<>!]',  # table.column = value
-            r'(\w+\.\w+)\s+LIKE',     # table.column LIKE
-            r'(\w+\.\w+)\s+IN\s*\(',  # table.column IN (...)
-            r'(\w+\.\w+)\s+IS\s+(?:NOT\s+)?NULL',  # table.column IS NULL
-            r'(\w+\.\w+)\s*[+\-*/]',  # table.column in expressions
-        ]
-        
-        for pattern in col_patterns:
-            col_matches = re.finditer(pattern, where_clause, re.IGNORECASE)
-            for col_match in col_matches:
-                col = col_match.group(1)
-                if '.' in col:
-                    where_cols.add(col)
-    
-    # Extract columns from JOIN clauses
-    join_matches = re.finditer(r'JOIN\s+\w+\s+ON\s+([^;]+?)(?:\s+(?:WHERE|GROUP|ORDER|LIMIT|UNION|$))', sql_query, re.IGNORECASE | re.DOTALL)
-    for match in join_matches:
-        join_clause = match.group(1)
-        # Extract column names from JOIN condition
-        col_matches = re.finditer(r'(\w+\.\w+|\w+)\s*[=<>!]', join_clause, re.IGNORECASE)
-        for col_match in col_matches:
-            col = col_match.group(1)
-            if '.' in col:
-                join_cols.add(col)
-    
-    # Extract columns from ORDER BY clause
-    orderby_matches = re.finditer(r'ORDER BY\s+([^;]+?)(?:\s+(?:LIMIT|UNION|$))', sql_query, re.IGNORECASE | re.DOTALL)
-    for match in orderby_matches:
-        orderby_clause = match.group(1)
-        # Extract column names from ORDER BY
-        col_matches = re.finditer(r'(\w+\.\w+|\w+)', orderby_clause, re.IGNORECASE)
-        for col_match in col_matches:
-            col = col_match.group(1)
-            if '.' in col:
-                orderby_cols.add(col)
-    
+    for match in re.finditer(r'WHERE\s+([\w\.]+)', sql_query, re.IGNORECASE):
+        col = match.group(1)
+        where_cols.add(col)
+    for match in re.finditer(r'JOIN\s+\w+\s+ON\s+([\w\.]+)', sql_query, re.IGNORECASE):
+        col = match.group(1)
+        join_cols.add(col)
+    for match in re.finditer(r'ORDER BY\s+([\w\.]+)', sql_query, re.IGNORECASE):
+        col = match.group(1)
+        orderby_cols.add(col)
     user_indexes = parse_user_indexes(indexes)
     recs = []
-    
-    def get_engine_specific_ddl(table_name, column_name, db_engine):
-        """Generate engine-specific CREATE INDEX DDL"""
-        if db_engine == 'postgresql':
-            return f"CREATE INDEX idx_{table_name}_{column_name}_fts ON {table_name}({column_name});"
-        elif db_engine == 'oracle':
-            return f"CREATE INDEX idx_{table_name}_{column_name}_fts ON {table_name}({column_name});"
-        elif db_engine == 'sqlserver':
-            return f"CREATE INDEX idx_{table_name}_{column_name}_fts ON {table_name}({column_name});"
-        else:
-            return f"CREATE INDEX idx_{table_name}_{column_name}_fts ON {table_name}({column_name});"
-    
-    def get_engine_specific_stats_command(table_name, db_engine):
-        """Generate engine-specific statistics command"""
-        if db_engine == 'postgresql':
-            return f"ANALYZE {table_name};"
-        elif db_engine == 'oracle':
-            return f"EXEC DBMS_STATS.GATHER_TABLE_STATS('{table_name}');"
-        elif db_engine == 'sqlserver':
-            return f"UPDATE STATISTICS {table_name};"
-        else:
-            return f"UPDATE STATISTICS {table_name};"
-    
-    def get_engine_specific_hint(table_name, column_name, db_engine):
-        """Generate engine-specific query hint"""
-        if db_engine == 'postgresql':
-            return f"-- PostgreSQL: Use SET enable_seqscan = off; to force index usage"
-        elif db_engine == 'oracle':
-            return f"/*+ INDEX({table_name} idx_{table_name}_{column_name}_fts) */"
-        elif db_engine == 'sqlserver':
-            return f"OPTION (FORCESEEK, INDEX(idx_{table_name}_{column_name}_fts))"
-        else:
-            return f"/*+ INDEX({table_name} idx_{table_name}_{column_name}_fts) */"
-    
-    # Track tables that need specific recommendations
-    tables_with_specific_recommendations = set()
-    
     for fts_table in fts_tables:
-        if not fts_table or fts_table.strip() == '':
-            continue
-            
         fts_table_lc = fts_table.lower()
         investigation_given = False
-        
         # Check if any relevant predicate column already has an index
         for col in where_cols | join_cols | orderby_cols:
             if col and '.' in col:
                 alias, column = col.split('.', 1)
                 real_table = alias_to_table.get(alias, alias).lower()
                 column_lc = column.lower()
-                
                 if real_table == fts_table_lc:
                     # Skip aggregates/aliases
                     if re.match(r'\d+$', column_lc) or column_lc in ['count', 'sum', 'avg', 'min', 'max', 'order_count']:
                         continue
-                    
                     if column_lc in user_indexes.get(real_table, set()):
-                        # Index exists but FTS still occurs - provide investigation steps
-                        rec_text = f"Table '{fts_table}' is accessed via Full Table Scan even though an index exists on '{column}'."
+                        # Only investigation advice, never a new index for this table
+                        rec_text = (f"Table '{fts_table}' is accessed via Full Table Scan even though an index exists on '{column}'. "
+                                    f"Consider running ANALYZE/UPDATE STATISTICS, checking for data skew or NULLs, or using a query hint to encourage index usage.")
                         key = ('fts_index_exists', fts_table, column)
-                        
-                        # Add targeted investigation steps
-                        investigation_steps = [
-                            f"📊 {get_engine_specific_stats_command(fts_table, db_engine)}",
-                            f"🔍 Check for data skew or NULL values in column '{column}'",
-                            f"📈 Verify index selectivity and cardinality for '{column}'",
-                            f"💡 {get_engine_specific_hint(fts_table, column, db_engine)}"
-                        ]
-                        
-                        sub_items = [{'text': step, 'actionable': True, 'type': 'investigation'} for step in investigation_steps]
-                        recs.append({'text': rec_text, 'actionable': True, 'sub': sub_items, 'key': key})
+                        recs.append({'text': rec_text, 'actionable': True, 'sub': [], 'key': key})
                         investigation_given = True
                         break
-        
         if not investigation_given:
             # Only recommend a new index if no relevant predicate column has an index
             best_col = None
-            best_col_full = None
-            
             for col in where_cols | join_cols | orderby_cols:
                 if col and '.' in col:
                     alias, column = col.split('.', 1)
                     real_table = alias_to_table.get(alias, alias).lower()
                     column_lc = column.lower()
-                    
                     if real_table == fts_table_lc:
                         # Skip aggregates/aliases
                         if re.match(r'\d+$', column_lc) or column_lc in ['count', 'sum', 'avg', 'min', 'max', 'order_count']:
                             continue
                         best_col = column
-                        best_col_full = col
                         break
-            
             if best_col:
-                # Generate specific recommendation with exact DDL
-                ddl_text = get_engine_specific_ddl(fts_table, best_col, db_engine)
                 rec_text = f"Consider creating an index on column '{best_col}' in table '{fts_table}' for better performance (Full Table Scan detected)."
+                ddl_text = f"CREATE INDEX idx_{fts_table}_{best_col}_auto ON {fts_table}({best_col});"
                 key = ('fts_index', fts_table, best_col)
-                
-                # Add only essential, targeted steps
-                optimization_steps = [
-                    f"💾 {ddl_text}",
-                    f"📊 {get_engine_specific_stats_command(fts_table, db_engine)}",
-                    f"💡 {get_engine_specific_hint(fts_table, best_col, db_engine)}"
-                ]
-                
-                sub_items = [{'text': step, 'actionable': True, 'type': 'optimization'} for step in optimization_steps]
-                recs.append({
-                    'text': rec_text, 
-                    'actionable': True, 
-                    'sub': sub_items, 
-                    'key': key
-                })
-                tables_with_specific_recommendations.add(fts_table)
+                recs.append({'text': rec_text, 'actionable': True, 'sub': [{'text': ddl_text, 'actionable': False}], 'key': key})
             else:
-                # No specific column found, but we can still provide targeted recommendations
-                # based on the query structure and common patterns
-                suggested_columns = []
-                
-                # Check if this table appears in JOIN conditions
-                for col in join_cols:
-                    if col and '.' in col:
-                        alias, column = col.split('.', 1)
-                        real_table = alias_to_table.get(alias, alias).lower()
-                        if real_table == fts_table_lc:
-                            suggested_columns.append(column)
-                
-                # Check if this table appears in ORDER BY
-                for col in orderby_cols:
-                    if col and '.' in col:
-                        alias, column = col.split('.', 1)
-                        real_table = alias_to_table.get(alias, alias).lower()
-                        if real_table == fts_table_lc:
-                            suggested_columns.append(column)
-                
-                if suggested_columns:
-                    # We found some columns that could be indexed
-                    best_col = suggested_columns[0]  # Take the first one
-                    ddl_text = get_engine_specific_ddl(fts_table, best_col, db_engine)
-                    rec_text = f"Consider creating an index on column '{best_col}' in table '{fts_table}' for better performance (Full Table Scan detected)."
-                    key = ('fts_index', fts_table, best_col)
-                    
-                    optimization_steps = [
-                        f"💾 {ddl_text}",
-                        f"📊 {get_engine_specific_stats_command(fts_table, db_engine)}",
-                        f"💡 {get_engine_specific_hint(fts_table, best_col, db_engine)}"
-                    ]
-                    
-                    sub_items = [{'text': step, 'actionable': True, 'type': 'optimization'} for step in optimization_steps]
-                    recs.append({
-                        'text': rec_text, 
-                        'actionable': True, 
-                        'sub': sub_items, 
-                        'key': key
-                    })
-                else:
-                    # Still no specific column found, provide targeted guidance based on table role
-                    if fts_table_lc in ['products', 'product']:
-                        rec_text = f"Consider creating an index on column 'category_id' in table '{fts_table}' for better performance (Full Table Scan detected)."
-                        key = ('fts_index', fts_table, 'category_id')
-                        ddl_text = get_engine_specific_ddl(fts_table, 'category_id', db_engine)
-                    elif fts_table_lc in ['order_items', 'orderitem']:
-                        rec_text = f"Consider creating an index on column 'order_id' in table '{fts_table}' for better performance (Full Table Scan detected)."
-                        key = ('fts_index', fts_table, 'order_id')
-                        ddl_text = get_engine_specific_ddl(fts_table, 'order_id', db_engine)
-                    else:
-                        # Generic but still specific recommendation
-                        rec_text = f"Consider creating an index on the primary key or foreign key column in table '{fts_table}' for better performance (Full Table Scan detected)."
+                rec_text = f"Table '{fts_table}' is accessed via Full Table Scan. Review for possible indexing or query rewrite."
                 key = ('fts_review', fts_table)
-                ddl_text = f"-- Add specific index based on your query patterns"
-                    
-                if 'ddl_text' in locals() and not ddl_text.startswith('--'):
-                    optimization_steps = [
-                        f"💾 {ddl_text}",
-                        f"📊 {get_engine_specific_stats_command(fts_table, db_engine)}",
-                        f"💡 {get_engine_specific_hint(fts_table, best_col, db_engine)}"
-                    ]
-                    sub_items = [{'text': step, 'actionable': True, 'type': 'optimization'} for step in optimization_steps]
-                else:
-                    general_steps = [
-                        "🔍 Analyze query patterns to identify best columns for indexing",
-                        "📊 Review table statistics and update if stale",
-                        "🧠 Consider composite indexes for multi-column WHERE clauses"
-                    ]
-                    sub_items = [{'text': step, 'actionable': True, 'type': 'general'} for step in general_steps]
-                
-                recs.append({'text': rec_text, 'actionable': True, 'sub': sub_items, 'key': key})
-    
+                recs.append({'text': rec_text, 'actionable': True, 'sub': [], 'key': key})
     return recs
 
 @app.errorhandler(CSRFError)
@@ -3747,38 +2982,26 @@ def handle_csrf_error(e):
     return render_template('csrf_error.html', reason=e.description), 400
 
 def detect_engine_from_explain(explain_plan):
-    """
-    Heuristically detect the likely DB engine from the EXPLAIN plan string.
-    Returns one of: 'oracle', 'mysql', 'postgresql', 'sqlserver', 'sqlite', or None.
-    """
     if not explain_plan:
         return None
     plan = explain_plan.strip().lower()
-    
-    # Oracle: pipe format, TABLE ACCESS FULL, COST (%CPU) - check first for Oracle-specific patterns
-    if ('| id  | operation' in plan or 'table access full' in plan or 'cost (%cpu)' in plan or 
-        'select statement' in plan or 'temp table transformation' in plan or 'load as select' in plan):
+    # SQL Server: |--, Clustered Index Scan, Hash Match, Nested Loops, etc.
+    if '|--' in plan or 'clustered index scan' in plan or 'hash match' in plan or 'nested loops' in plan:
+        return 'sqlserver'
+    # Oracle: pipe format, TABLE ACCESS FULL, COST (%CPU)
+    if 'table access full' in plan or 'cost (%cpu)' in plan or '| id  | operation' in plan:
         return 'oracle'
-    
     # MySQL: id, select_type, table, type, rows, Extra
     if 'select_type' in plan and 'rows' in plan and 'extra' in plan:
         return 'mysql'
     if '| id |' in plan and '| table |' in plan:
         return 'mysql'
-    
-    # SQL Server: |--, Clustered Index Scan, Hash Match, Nested Loops, etc. - check before PostgreSQL
-    if ('|--' in plan or 'clustered index scan' in plan or 'hash match' in plan or 
-        'nested loops' in plan or 'physicalop' in plan or 'logicalop' in plan):
-        return 'sqlserver'
-    
     # PostgreSQL: Seq Scan, Index Scan, cost=, width=
     if 'seq scan' in plan or 'index scan' in plan or 'cost=' in plan or 'width=' in plan:
         return 'postgresql'
-    
     # SQLite: SCAN TABLE, SEARCH TABLE
     if 'scan table' in plan or 'search table' in plan:
         return 'sqlite'
-    
     return None
 
 def detect_explain_format(explain_plan):
@@ -3927,14 +3150,7 @@ def parse_postgresql_xml(explain_plan):
 
 def parse_postgresql_text(explain_plan):
     """Parse PostgreSQL TEXT format - enhanced version"""
-    import re
-    
-    # FIXED: Strip hints from the explain plan before parsing
-    cleaned_plan = explain_plan
-    # Remove any /* ... */ comments including hints
-    cleaned_plan = re.sub(r'/\*.*?\*/', '', explain_plan, flags=re.DOTALL | re.IGNORECASE)
-    
-    lines = cleaned_plan.strip().split('\n')
+    lines = explain_plan.strip().split('\n')
     
     # Skip header lines
     skip_patterns = ['Planning Time:', 'Execution Time:', 'QUERY PLAN', '---']
@@ -4073,8 +3289,7 @@ def parse_buffer_info(buffers_str):
     if shared_hit:
         buffers['shared_hit'] = int(shared_hit.group(1))
     
-    # Fix: Look for "read=" after "shared hit="
-    shared_read = re.search(r'read=(\d+)', buffers_str)
+    shared_read = re.search(r'shared read=(\d+)', buffers_str)
     if shared_read:
         buffers['shared_read'] = int(shared_read.group(1))
     
@@ -4515,8 +3730,8 @@ def get_real_column_index_recommendations(sql_query, indexes, alias_to_table, ta
         if col and '.' in col:
             alias, column = col.split('.', 1)
             real_table = alias_to_table.get(alias, alias)
-            # Check if real_table is in tables (tables is a dict, not list)
-            if real_table not in tables:
+            # Check if real_table is in tables
+            if real_table not in [t['name'] for t in tables]:
                 continue
             # Skip aggregates/aliases
             if re.match(r'\d+$', column) or column.lower() in ['count', 'sum', 'avg', 'min', 'max', 'order_count']:
@@ -4538,93 +3753,40 @@ def extract_fts_tables_from_explain(explain_plan, db_engine):
     """
     Extract all tables accessed via full table scan from the EXPLAIN plan using EXPLAIN_KEYWORDS.
     Returns a set of table names.
-    Enhanced to properly extract table names from various formats.
+    Improved for Oracle: robustly extract table names from lines like 'TABLE ACCESS FULL USERS' and pipe-formatted plans.
     """
     from explain_keywords import EXPLAIN_KEYWORDS
     fts_tables = set()
     if not explain_plan:
         return fts_tables
-    
     # Normalize line endings and strip whitespace
     plan_lines = [l.strip() for l in explain_plan.strip().split('\n') if l.strip()]
     keywords = EXPLAIN_KEYWORDS.get(db_engine, {})
     scan_keywords = set(keywords.get('sequential', []) + keywords.get('table', []) + keywords.get('full_scan', []) + keywords.get('scan', []))
-    
-    # Enhanced filtering to exclude SQL keywords and common non-table terms
-    sql_keywords = {
-        'FULL', 'ACCESS', 'TABLE', 'SCAN', 'INDEX', 'HASH', 'JOIN', 'STATEMENT',
-        'ON', 'WHERE', 'AND', 'OR', 'NOT', 'IN', 'EXISTS', 'BETWEEN', 'LIKE',
-        'GROUP', 'ORDER', 'HAVING', 'UNION', 'INTERSECT', 'EXCEPT', 'DISTINCT',
-        'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'AS', 'IS', 'NULL', 'TRUE', 'FALSE'
-    }
-    
     for line in plan_lines:
-        # PostgreSQL format: "Seq Scan on users (cost=0.00..431.00 rows=21000 width=4)"
-        if db_engine == 'postgresql':
-            # Look for "Seq Scan on table_name" pattern
-            seq_scan_match = re.search(r'Seq Scan on (\w+)', line, re.IGNORECASE)
-            if seq_scan_match:
-                table_name = seq_scan_match.group(1)
-                if table_name and table_name.upper() not in sql_keywords:
-                    fts_tables.add(table_name)
-                    continue
-            
-            # Look for "Index Scan on table_name" but only if it's a full scan
-            index_scan_match = re.search(r'Index Scan on (\w+)', line, re.IGNORECASE)
-            if index_scan_match and 'full' in line.lower():
-                table_name = index_scan_match.group(1)
-                if table_name and table_name.upper() not in sql_keywords:
-                    fts_tables.add(table_name)
-                    continue
-        
         # Oracle pipe format: | 3 | TABLE ACCESS FULL | DEPARTMENTS | 27 | 3 (0) |
-        elif db_engine == 'oracle' and '|' in line:
+        if db_engine == 'oracle' and '|' in line:
             parts = [p.strip() for p in line.strip('|').split('|')]
             if len(parts) >= 3:
                 op = parts[1].upper()
                 table = parts[2]
-                # FIXED: Only detect as FTS if it's actually a full table scan
-                # Oracle's "TABLE ACCESS BY INDEX ROWID" is NOT a full table scan
-                if ('TABLE ACCESS FULL' in op or 'FULL TABLE SCAN' in op) and table and table.upper() not in sql_keywords and table.upper() not in {'', 'N/A', 'VW_SQ_1'}:
+                for kw in scan_keywords:
+                    if kw.upper() in op:
+                        if table and table.upper() not in {'', 'N/A', 'VW_SQ_1'}:
                             fts_tables.add(table)
-                # Explicitly exclude index-based access patterns
-                elif any(index_pattern in op for index_pattern in ['INDEX ROWID', 'INDEX SCAN', 'INDEX UNIQUE SCAN', 'INDEX RANGE SCAN', 'DOMAIN INDEX']):
-                    # This is an index scan, not a full table scan - do nothing
-                    pass
-        
-        # SQL Server format: "Clustered Index Scan (OBJECT:([database].[schema].[table]))"
-        elif db_engine == 'sqlserver':
-            # Look for table names in scan operations
-            scan_match = re.search(r'Scan.*?\[([^\]]+)\]', line, re.IGNORECASE)
-            if scan_match:
-                table_path = scan_match.group(1)
-                # Extract table name from database.schema.table format
-                table_parts = table_path.split('.')
-                if len(table_parts) >= 3:
-                    table_name = table_parts[-1]  # Last part is table name
-                    if table_name and table_name.upper() not in sql_keywords:
-                        fts_tables.add(table_name)
-        
-        # Generic fallback for other engines
         else:
             for kw in scan_keywords:
                 if kw.lower() in line.lower():
-                    # Try to extract table name after the scan keyword
                     m = re.search(rf"{re.escape(kw)}[\s]+([\w\"\[\]]+)", line, re.IGNORECASE)
                     if m:
                         table = m.group(1).replace('"', '').replace('[', '').replace(']', '')
-                        if table.upper() not in sql_keywords and len(table) > 0:
-                            fts_tables.add(table)
+                        fts_tables.add(table)
                     else:
-                        # Fallback: look for words that might be table names
                         parts = line.strip().split()
-                        for i, part in enumerate(parts):
-                            if kw.lower() in part.lower() and i + 1 < len(parts):
-                                potential_table = parts[i + 1]
-                                if potential_table and potential_table.upper() not in sql_keywords and len(potential_table) > 0:
-                                    fts_tables.add(potential_table)
-                                    break
-    
+                        if len(parts) > 0:
+                            table = parts[-1].replace('"', '').replace('[', '').replace(']', '')
+                            if table.upper() not in {'FULL', 'ACCESS', 'TABLE', 'SCAN', 'INDEX', 'HASH', 'JOIN', 'STATEMENT'}:
+                                fts_tables.add(table)
     return fts_tables
 
 # In each analyze_* function, after parsing the EXPLAIN plan:
@@ -4632,86 +3794,1712 @@ def extract_fts_tables_from_explain(explain_plan, db_engine):
 # 2. For each FTS table, if not already indexed, recommend an index on the best predicate column (from WHERE/JOIN), or recommend review if no predicate found.
 # 3. Ensure all FTS tables are covered in recommendations.
 
+def extract_explain_plan_metrics(explain_plan, db_engine):
+    """
+    Parse EXPLAIN plan for actual rows scanned, cost, memory/bytes, and estimated time for all engines.
+    Returns a dict: {rows_scanned, cost, memory, time}
+    """
+    metrics = {'rows_scanned': None, 'cost': None, 'memory': None, 'time': None}
+    if not explain_plan:
+        return metrics
+    plan_lines = explain_plan.strip().split('\n')
+    # Try CSV first if it looks like CSV
+    if any(',' in line for line in plan_lines[:3]):
+        try:
+            csv_reader = csv.DictReader(StringIO(explain_plan))
+            rows_list, cost_list, mem_list, time_list = [], [], [], []
+            for row in csv_reader:
+                for k, v in row.items():
+                    if v is None or v == '' or v == 'NULL':
+                        continue
+                    kl = k.lower()
+                    if 'row' in kl and v.isdigit():
+                        rows_list.append(int(v))
+                    if 'cost' in kl and v.replace('.', '', 1).isdigit():
+                        cost_list.append(float(v))
+                    if 'byte' in kl and v.isdigit():
+                        mem_list.append(int(v))
+                    if 'mem' in kl and v.replace('.', '', 1).isdigit():
+                        mem_list.append(float(v))
+                    if 'time' in kl and v.replace('.', '', 1).isdigit():
+                        time_list.append(float(v))
+            if rows_list:
+                metrics['rows_scanned'] = max(rows_list)
+            if cost_list:
+                metrics['cost'] = max(cost_list)
+            if mem_list:
+                metrics['memory'] = max(mem_list)
+            if time_list:
+                metrics['time'] = max(time_list)
+            return metrics
+        except Exception:
+            pass
+    # Text parsing by engine
+    if db_engine == 'postgresql':
+        # e.g. Seq Scan on users  (cost=0.00..431.00 rows=21000 width=4)
+        rows_list, cost_list, mem_list, time_list = [], [], [], []
+        for line in plan_lines:
+            m = re.search(r'rows=(\d+)', line)
+            if m:
+                rows_list.append(int(m.group(1)))
+            m = re.search(r'cost=([\d\.]+)\.\.([\d\.]+)', line)
+            if m:
+                cost_list.append(float(m.group(2)))
+            m = re.search(r'width=(\d+)', line)
+            if m:
+                mem_list.append(int(m.group(1)))
+        if rows_list:
+            metrics['rows_scanned'] = max(rows_list)
+        if cost_list:
+            metrics['cost'] = max(cost_list)
+        if mem_list:
+            metrics['memory'] = max(mem_list)
+    elif db_engine == 'mysql':
+        # e.g. | id | select_type | table | type | rows | Extra |
+        for line in plan_lines:
+            m = re.search(r'rows=?(\d+)', line)
+            if m:
+                metrics['rows_scanned'] = max(metrics['rows_scanned'] or 0, int(m.group(1))) if metrics['rows_scanned'] else int(m.group(1))
+            m = re.search(r'Using\s+filesort', line, re.IGNORECASE)
+            if m:
+                metrics['cost'] = (metrics['cost'] or 0) + 10
+        # MySQL EXPLAIN rarely gives memory/time directly
+    elif db_engine == 'oracle':
+        # Pipe/table or indented
+        for line in plan_lines:
+            m = re.search(r'rows=?(\d+)', line)
+            if m:
+                metrics['rows_scanned'] = max(metrics['rows_scanned'] or 0, int(m.group(1))) if metrics['rows_scanned'] else int(m.group(1))
+            m = re.search(r'cost=?(\d+)', line)
+            if m:
+                metrics['cost'] = max(metrics['cost'] or 0, int(m.group(1))) if metrics['cost'] else int(m.group(1))
+            m = re.search(r'bytes=?(\d+)', line)
+            if m:
+                metrics['memory'] = max(metrics['memory'] or 0, int(m.group(1))) if metrics['memory'] else int(m.group(1))
+    elif db_engine == 'sqlserver':
+        for line in plan_lines:
+            m = re.search(r'Estimated Rows=?(\d+)', line, re.IGNORECASE)
+            if m:
+                metrics['rows_scanned'] = max(metrics['rows_scanned'] or 0, int(m.group(1))) if metrics['rows_scanned'] else int(m.group(1))
+            m = re.search(r'Estimated Total Subtree Cost=([\d\.]+)', line, re.IGNORECASE)
+            if m:
+                metrics['cost'] = max(metrics['cost'] or 0, float(m.group(1))) if metrics['cost'] else float(m.group(1))
+            m = re.search(r'Memory Grant=([\d\.]+)', line, re.IGNORECASE)
+            if m:
+                metrics['memory'] = max(metrics['memory'] or 0, float(m.group(1))) if metrics['memory'] else float(m.group(1))
+    elif db_engine == 'sqlite':
+        for line in plan_lines:
+            m = re.search(r'rows=?(\d+)', line)
+            if m:
+                metrics['rows_scanned'] = max(metrics['rows_scanned'] or 0, int(m.group(1))) if metrics['rows_scanned'] else int(m.group(1))
+    return metrics
+
+def parse_user_indexes(indexes):
+    """
+    Parse user-provided index definitions and return {table: set(columns)} for fast lookup.
+    Supports multi-column indexes and different syntaxes for all engines.
+    """
+    table_to_indexed_cols = {}
+    for idx in indexes:
+        defn = idx.get('definition') or idx.get('ddl') or ''
+        # Try to extract table and columns from CREATE INDEX ... ON table(col1, col2, ...)
+        m = re.search(r'CREATE\s+INDEX\s+\w+\s+ON\s+([\w\"\[\]]+)\s*\(([^)]+)\)', defn, re.IGNORECASE)
+        if m:
+            table = m.group(1).replace('"', '').replace('[', '').replace(']', '').lower()
+            cols = [c.strip().lower() for c in m.group(2).split(',')]
+            table_to_indexed_cols.setdefault(table, set()).update(cols)
+            continue
+        # MySQL/SQL Server: CREATE INDEX ... ON table (col1, col2)
+        m = re.search(r'ON\s+([\w\"\[\]]+)\s*\(([^)]+)\)', defn, re.IGNORECASE)
+        if m:
+            table = m.group(1).replace('"', '').replace('[', '').replace(']', '').lower()
+            cols = [c.strip().lower() for c in m.group(2).split(',')]
+            table_to_indexed_cols.setdefault(table, set()).update(cols)
+            continue
+        # Oracle: CREATE INDEX ... ON "TABLE" ("COL1", ...)
+        m = re.search(r'ON\s+"?([\w]+)"?\s*\(([^)]+)\)', defn, re.IGNORECASE)
+        if m:
+            table = m.group(1).lower()
+            cols = [c.replace('"', '').strip().lower() for c in m.group(2).split(',')]
+            table_to_indexed_cols.setdefault(table, set()).update(cols)
+    return table_to_indexed_cols
+
+# Update recommend_indexes_for_fts_tables to use parse_user_indexes
+
+def recommend_indexes_for_fts_tables(sql_query, indexes, alias_to_table, tables, explain_plan, db_engine):
+    """
+    For every FTS table detected in the EXPLAIN plan, recommend an index on the best predicate column (from WHERE/JOIN/ORDER BY),
+    or a review if no predicate is found. If an index exists but FTS still occurs, recommend investigation steps.
+    Never recommend both a new index and investigation for the same table.
+    """
+    fts_tables = extract_fts_tables_from_explain(explain_plan, db_engine)
+    where_cols = set()
+    orderby_cols = set()
+    join_cols = set()
+    for match in re.finditer(r'WHERE\s+([\w\.]+)', sql_query, re.IGNORECASE):
+        col = match.group(1)
+        where_cols.add(col)
+    for match in re.finditer(r'JOIN\s+\w+\s+ON\s+([\w\.]+)', sql_query, re.IGNORECASE):
+        col = match.group(1)
+        join_cols.add(col)
+    for match in re.finditer(r'ORDER BY\s+([\w\.]+)', sql_query, re.IGNORECASE):
+        col = match.group(1)
+        orderby_cols.add(col)
+    user_indexes = parse_user_indexes(indexes)
+    recs = []
+    for fts_table in fts_tables:
+        fts_table_lc = fts_table.lower()
+        investigation_given = False
+        # Check if any relevant predicate column already has an index
+        for col in where_cols | join_cols | orderby_cols:
+            if col and '.' in col:
+                alias, column = col.split('.', 1)
+                real_table = alias_to_table.get(alias, alias).lower()
+                column_lc = column.lower()
+                if real_table == fts_table_lc:
+                    # Skip aggregates/aliases
+                    if re.match(r'\d+$', column_lc) or column_lc in ['count', 'sum', 'avg', 'min', 'max', 'order_count']:
+                        continue
+                    if column_lc in user_indexes.get(real_table, set()):
+                        # Only investigation advice, never a new index for this table
+                        rec_text = (f"Table '{fts_table}' is accessed via Full Table Scan even though an index exists on '{column}'. "
+                                    f"Consider running ANALYZE/UPDATE STATISTICS, checking for data skew or NULLs, or using a query hint to encourage index usage.")
+                        key = ('fts_index_exists', fts_table, column)
+                        recs.append({'text': rec_text, 'actionable': True, 'sub': [], 'key': key})
+                        investigation_given = True
+                        break
+        if not investigation_given:
+            # Only recommend a new index if no relevant predicate column has an index
+            best_col = None
+            for col in where_cols | join_cols | orderby_cols:
+                if col and '.' in col:
+                    alias, column = col.split('.', 1)
+                    real_table = alias_to_table.get(alias, alias).lower()
+                    column_lc = column.lower()
+                    if real_table == fts_table_lc:
+                        # Skip aggregates/aliases
+                        if re.match(r'\d+$', column_lc) or column_lc in ['count', 'sum', 'avg', 'min', 'max', 'order_count']:
+                            continue
+                        best_col = column
+                        break
+            if best_col:
+                rec_text = f"Consider creating an index on column '{best_col}' in table '{fts_table}' for better performance (Full Table Scan detected)."
+                ddl_text = f"CREATE INDEX idx_{fts_table}_{best_col}_auto ON {fts_table}({best_col});"
+                key = ('fts_index', fts_table, best_col)
+                recs.append({'text': rec_text, 'actionable': True, 'sub': [{'text': ddl_text, 'actionable': False}], 'key': key})
+            else:
+                rec_text = f"Table '{fts_table}' is accessed via Full Table Scan. Review for possible indexing or query rewrite."
+                key = ('fts_review', fts_table)
+                recs.append({'text': rec_text, 'actionable': True, 'sub': [], 'key': key})
+    return recs
+
+@app.errorhandler(CSRFError)
+def handle_csrf_error(e):
+    return render_template('csrf_error.html', reason=e.description), 400
+
+def detect_engine_from_explain(explain_plan):
+    """
+    Heuristically detect the likely DB engine from the EXPLAIN plan string.
+    Returns one of: 'oracle', 'mysql', 'postgresql', 'sqlserver', 'sqlite', or None.
+    """
+    if not explain_plan:
+        return None
+    plan = explain_plan.strip().lower()
+    # SQL Server: |--, Clustered Index Scan, Hash Match, Nested Loops, etc.
+    if '|--' in plan or 'clustered index scan' in plan or 'hash match' in plan or 'nested loops' in plan:
+        return 'sqlserver'
+    # Oracle: pipe format, TABLE ACCESS FULL, COST (%CPU)
+    if 'table access full' in plan or 'cost (%cpu)' in plan or '| id  | operation' in plan:
+        return 'oracle'
+    # MySQL: id, select_type, table, type, rows, Extra
+    if 'select_type' in plan and 'rows' in plan and 'extra' in plan:
+        return 'mysql'
+    if '| id |' in plan and '| table |' in plan:
+        return 'mysql'
+    # PostgreSQL: Seq Scan, Index Scan, cost=, width=
+    if 'seq scan' in plan or 'index scan' in plan or 'cost=' in plan or 'width=' in plan:
+        return 'postgresql'
+    # SQLite: SCAN TABLE, SEARCH TABLE
+    if 'scan table' in plan or 'search table' in plan:
+        return 'sqlite'
+    return None
+
+def detect_explain_format(explain_plan):
+    if not explain_plan:
+        return 'unknown'
+    plan_text = explain_plan.strip()
+    # SQL Server tree format (prioritize this check)
+    if '|--' in plan_text or 'Clustered Index Scan' in plan_text or 'Hash Match' in plan_text or 'Nested Loops' in plan_text:
+        return 'sqlserver'
+    # Check for JSON format
+    if (plan_text.startswith('[') and plan_text.endswith(']')) or \
+       (plan_text.startswith('{') and plan_text.endswith('}')):
+        try:
+            json.loads(plan_text)
+            return 'json'
+        except json.JSONDecodeError:
+            pass
+    # Check for XML format (SQL Server ShowPlanXML)
+    if plan_text.startswith('<') or '<RelOp' in plan_text or '<ShowPlanXML' in plan_text:
+        return 'xml'
+    # Check for SQL Server specific formats (table style)
+    if any(keyword in plan_text for keyword in [
+        'StmtText', 'PhysicalOp', 'LogicalOp', 'EstimateRows', 'EstimateIO', 'EstimateCPU', 'TotalSubtreeCost',
+        'HashAggregate', 'NodeId', 'PhysicalOp=', 'LogicalOp=', 'EstimateRows='
+    ]):
+        return 'sqlserver'
+    # Check for PostgreSQL text format (has indentation and -> markers)
+    if '->' in plan_text or 'Planning Time:' in plan_text or 'Execution Time:' in plan_text:
+        return 'postgresql_text'
+    # Check for Oracle format (pipe-delimited or table format)
+    if '|' in plan_text and ('Id' in plan_text or 'OPERATION' in plan_text):
+        return 'oracle'
+    # Default to text format
+    return 'text'
+
+def parse_explain_to_json(explain_plan, db_engine):
+    """Parse explain plan with format detection and routing"""
+    if not explain_plan:
+        return None
+    
+    # Auto-detect format
+    detected_format = detect_explain_format(explain_plan)
+    
+    # Route to appropriate parser based on engine and format
+    if db_engine == 'postgresql':
+        if detected_format == 'json':
+            return parse_postgresql_json(explain_plan)
+        elif detected_format == 'xml':
+            return parse_postgresql_xml(explain_plan)
+        elif detected_format == 'postgresql_text':
+            return parse_postgresql_text(explain_plan)
+        else:
+            return parse_postgresql_text(explain_plan)  # fallback
+    elif db_engine == 'oracle':
+        if detected_format == 'oracle':
+            return parse_oracle_explain_flow(explain_plan)
+        else:
+            return parse_oracle_explain_flow(explain_plan)  # fallback
+    elif db_engine == 'sqlserver':
+        if detected_format == 'sqlserver':
+            return parse_sqlserver_explain_flow(explain_plan)
+        elif detected_format == 'xml':
+            return parse_sqlserver_xml(explain_plan)
+        else:
+            return parse_sqlserver_explain_flow(explain_plan)  # fallback
+    
+    return None
+
+def parse_postgresql_json(explain_plan):
+    """Parse PostgreSQL JSON format - richest data source"""
+    try:
+        data = json.loads(explain_plan)
+        return extract_from_postgresql_json(data)
+    except json.JSONDecodeError as e:
+        print(f"JSON parsing error: {e}")
+        return None
+
+def extract_from_postgresql_json(data):
+    """Extract execution tree from PostgreSQL JSON format"""
+    if not data or not isinstance(data, list) or len(data) == 0:
+        return None
+    
+    # PostgreSQL JSON format: [{"Plan": {...}}]
+    plan_data = data[0].get('Plan', {})
+    
+    execution_tree = {
+        'operation': 'Query Execution Plan',
+        'cost': 0,
+        'rows': 0,
+        'time': 0,
+        'buffers': {},
+        'children': []
+    }
+    
+    def extract_node_data(node):
+        """Extract metrics from a JSON node"""
+        node_data = {
+            'operation': node.get('Node Type', 'Unknown Operation'),
+            'cost': node.get('Total Cost', 0),
+            'startup_cost': node.get('Startup Cost', 0),
+            'rows': node.get('Actual Rows', node.get('Plan Rows', 0)),
+            'time': node.get('Actual Total Time', 0),
+            'buffers': node.get('Buffers', {}),
+            'children': []
+        }
+        
+        # Add relation name if available
+        if node.get('Relation Name'):
+            node_data['operation'] += f" on {node.get('Relation Name')}"
+        
+        # Add index name if available
+        if node.get('Index Name'):
+            node_data['operation'] += f" using {node.get('Index Name')}"
+        
+        # Add scan direction if available
+        if node.get('Scan Direction'):
+            node_data['operation'] += f" ({node.get('Scan Direction')})"
+        
+        # Add filter conditions if available
+        if node.get('Filter'):
+            node_data['filter'] = node.get('Filter')
+        
+        # Add join conditions if available
+        if node.get('Hash Cond'):
+            node_data['join_condition'] = node.get('Hash Cond')
+        
+        # Process children
+        if 'Plans' in node:
+            for child in node['Plans']:
+                child_data = extract_node_data(child)
+                node_data['children'].append(child_data)
+        
+        return node_data
+    
+    # Extract the main plan
+    main_plan = extract_node_data(plan_data)
+    execution_tree.update(main_plan)
+    
+    return execution_tree
+
+def parse_postgresql_xml(explain_plan):
+    """Parse PostgreSQL XML format"""
+    # TODO: Implement XML parsing for PostgreSQL
+    # For now, fallback to text parsing
+    return parse_postgresql_text(explain_plan)
+
+def parse_postgresql_text(explain_plan):
+    """Parse PostgreSQL TEXT format - enhanced version"""
+    lines = explain_plan.strip().split('\n')
+    
+    # Skip header lines
+    skip_patterns = ['Planning Time:', 'Execution Time:', 'QUERY PLAN', '---']
+    filtered_lines = []
+    for line in lines:
+        if not any(pattern in line for pattern in skip_patterns):
+            filtered_lines.append(line)
+    
+    if not filtered_lines:
+        return None
+    
+    # Parse the execution flow based on indentation
+    execution_tree = {
+        'operation': 'Query Execution Plan',
+        'cost': 0,
+        'rows': 0,
+        'time': 0,
+        'buffers': {},
+        'children': []
+    }
+    
+    # Stack to track parent nodes based on indentation
+    node_stack = [execution_tree]
+    indent_stack = [-1]  # Track indentation levels
+    
+    for line in filtered_lines:
+        if not line.strip():
+            continue
+            
+        # Calculate indentation level (count leading spaces or ->)
+        original_line = line
+        indent_level = 0
+        while line.startswith('  ') or line.startswith('-> '):
+            if line.startswith('-> '):
+                indent_level += 1
+                line = line[3:]
+            else:
+                indent_level += 1
+                line = line[2:]
+        
+        # Parse operation and metrics
+        operation, metrics = parse_enhanced_postgresql_line(line)
+        
+        if not operation:
+            continue
+        
+        # Create node
+        node = {
+            'operation': operation,
+            'cost': metrics.get('cost', 0),
+            'startup_cost': metrics.get('startup_cost', 0),
+            'rows': metrics.get('rows', 0),
+            'time': metrics.get('time', 0),
+            'buffers': metrics.get('buffers', {}),
+            'filter': metrics.get('filter'),
+            'join_condition': metrics.get('join_condition'),
+            'children': []
+        }
+        
+        # Find the correct parent based on indentation
+        while len(indent_stack) > 1 and indent_level <= indent_stack[-1]:
+            node_stack.pop()
+            indent_stack.pop()
+        
+        # Add to current parent
+        node_stack[-1]['children'].append(node)
+        
+        # Push this node onto stack for potential children
+        node_stack.append(node)
+        indent_stack.append(indent_level)
+    
+    return execution_tree
+
+def parse_enhanced_postgresql_line(line):
+    """Parse a single PostgreSQL operation line with enhanced metrics"""
+    line = line.strip()
+    
+    # Extract metrics from parentheses
+    metrics = {}
+    operation = line
+    
+    # Look for metrics in parentheses
+    if ' (cost=' in line:
+        parts = line.split(' (cost=', 1)
+        operation = parts[0].strip()
+        metrics_str = 'cost=' + parts[1]
+        
+        # Parse startup and total cost
+        cost_match = re.search(r'cost=([\d.]+)\.\.([\d.]+)', metrics_str)
+        if cost_match:
+            metrics['startup_cost'] = float(cost_match.group(1))
+            metrics['cost'] = float(cost_match.group(2))
+        
+        # Parse rows
+        rows_match = re.search(r'rows=(\d+)', metrics_str)
+        if rows_match:
+            metrics['rows'] = int(rows_match.group(1))
+        
+        # Parse actual time if available
+        time_match = re.search(r'actual time=([\d.]+)\.\.([\d.]+)', metrics_str)
+        if time_match:
+            metrics['time'] = float(time_match.group(2))  # Use end time
+        
+        # Parse width
+        width_match = re.search(r'width=(\d+)', metrics_str)
+        if width_match:
+            metrics['width'] = int(width_match.group(1))
+        
+        # Parse buffer information
+        buffers_match = re.search(r'Buffers: (.*?)(?:\s|$)', metrics_str)
+        if buffers_match:
+            buffers_str = buffers_match.group(1)
+            metrics['buffers'] = parse_buffer_info(buffers_str)
+    
+    # Extract filter conditions
+    filter_match = re.search(r'Filter: (.+?)(?:\s|$)', line)
+    if filter_match:
+        metrics['filter'] = filter_match.group(1)
+    
+    # Extract join conditions
+    join_match = re.search(r'Hash Cond: (.+?)(?:\s|$)', line)
+    if join_match:
+        metrics['join_condition'] = join_match.group(1)
+    
+    # Clean up operation name
+    operation = operation.replace('_', ' ').title()
+    
+    return operation, metrics
+
+def parse_buffer_info(buffers_str):
+    """Parse PostgreSQL buffer information"""
+    buffers = {}
+    
+    # Parse shared hit/read/written
+    shared_hit = re.search(r'shared hit=(\d+)', buffers_str)
+    if shared_hit:
+        buffers['shared_hit'] = int(shared_hit.group(1))
+    
+    shared_read = re.search(r'shared read=(\d+)', buffers_str)
+    if shared_read:
+        buffers['shared_read'] = int(shared_read.group(1))
+    
+    shared_written = re.search(r'shared written=(\d+)', buffers_str)
+    if shared_written:
+        buffers['shared_written'] = int(shared_written.group(1))
+    
+    return buffers
+
+def parse_sqlserver_xml(explain_plan):
+    """Parse SQL Server XML format (ShowPlanXML)"""
+    try:
+        import xml.etree.ElementTree as ET
+        
+        # Parse XML
+        root = ET.fromstring(explain_plan)
+        
+        # Find all RelOp nodes
+        relops = root.findall('.//{http://schemas.microsoft.com/sqlserver/2004/07/showplan}RelOp')
+        
+        if not relops:
+            return None
+        
+        execution_tree = {
+            'operation': 'SQL Server Query Execution Plan',
+            'cost': 0,
+            'rows': 0,
+            'time': 0,
+            'buffers': {},
+            'children': []
+        }
+        
+        # Build hierarchy based on NodeId
+        node_map = {}
+        
+        for relop in relops:
+            node_id = relop.get('NodeId', '0')
+            physical_op = relop.get('PhysicalOp', 'Unknown')
+            logical_op = relop.get('LogicalOp', 'Unknown')
+            estimate_rows = relop.get('EstimateRows', '0')
+            estimated_cost = relop.get('EstimatedTotalSubtreeCost', '0')
+            
+            # Parse metrics
+            try:
+                rows = float(estimate_rows) if estimate_rows else 0
+                cost = float(estimated_cost) if estimated_cost else 0
+            except (ValueError, TypeError):
+                rows, cost = 0, 0
+            
+            # Create node
+            node = {
+                'operation': physical_op,
+                'cost': cost,
+                'rows': rows,
+                'time': 0,  # XML format doesn't provide actual time
+                'buffers': {},
+                'children': []
+            }
+            
+            node_map[node_id] = node
+        
+        # Build hierarchy - assume nodes are in execution order
+        # For simplicity, add all nodes as children of root
+        for node in node_map.values():
+            execution_tree['children'].append(node)
+        
+        return execution_tree
+        
+    except Exception as e:
+        print(f"SQL Server XML parsing error: {e}")
+        return None
+
+def parse_sqlserver_generic_format(lines):
+    """Parse SQL Server generic format"""
+    execution_tree = {
+        'operation': 'SQL Server Query Execution Plan',
+        'cost': 0,
+        'rows': 0,
+        'time': 0,
+        'buffers': {},
+        'children': []
+    }
+    
+    # For other SQL Server formats, try to extract operations
+    for line in lines:
+        operation, metrics = parse_enhanced_sqlserver_line(line)
+        if operation:
+            node = {
+                'operation': operation,
+                'cost': metrics.get('cost', 0),
+                'rows': metrics.get('rows', 0),
+                'time': metrics.get('time', 0),
+                'buffers': metrics.get('buffers', {}),
+                'children': []
+            }
+            execution_tree['children'].append(node)
+    
+    return execution_tree
+
+
+
+def parse_operation_line(line):
+    """Parse a single operation line to extract operation name and metrics"""
+    line = line.strip()
+    
+    # Extract metrics from parentheses
+    metrics = {}
+    operation = line
+    
+    # Look for metrics in parentheses
+    if ' (cost=' in line:
+        parts = line.split(' (cost=', 1)
+        operation = parts[0].strip()
+        metrics_str = 'cost=' + parts[1]
+        
+        # Parse cost
+        cost_match = re.search(r'cost=([\d.]+)\.\.([\d.]+)', metrics_str)
+        if cost_match:
+            metrics['cost'] = float(cost_match.group(2))  # Use end cost
+        
+        # Parse rows
+        rows_match = re.search(r'rows=(\d+)', metrics_str)
+        if rows_match:
+            metrics['rows'] = int(rows_match.group(1))
+        
+        # Parse actual time if available
+        time_match = re.search(r'actual time=([\d.]+)\.\.([\d.]+)', metrics_str)
+        if time_match:
+            metrics['time'] = float(time_match.group(2))  # Use end time
+        
+        # Parse width
+        width_match = re.search(r'width=(\d+)', metrics_str)
+        if width_match:
+            metrics['width'] = int(width_match.group(1))
+    
+    # Clean up operation name
+    operation = operation.replace('_', ' ').title()
+    
+    return operation, metrics
+
+def parse_explain_plan_to_mermaid(explain_plan, db_engine='postgresql'):
+    """
+    Parse EXPLAIN plan output and convert to Mermaid.js flowchart.
+    Supports CSV data and text input for multiple database engines.
+    """
+    if not explain_plan or not explain_plan.strip():
+        return None
+    
+    try:
+        # For MySQL with pipe separators, use text parser
+        if db_engine == 'mysql' and '|' in explain_plan and 'select_type' in explain_plan:
+            return parse_text_explain_plan(explain_plan, db_engine)
+        # Try to parse as CSV first
+        elif '\n' in explain_plan and any(',' in line for line in explain_plan.split('\n')[:3]):
+            return parse_csv_explain_plan(explain_plan, db_engine)
+        else:
+            return parse_text_explain_plan(explain_plan, db_engine)
+    except Exception as e:
+        return None
+
+def parse_csv_explain_plan(csv_data, db_engine):
+    """Parse CSV-formatted EXPLAIN plan data"""
+    import csv
+    from io import StringIO
+    
+    nodes = []
+    edges = []
+    node_id_map = {}
+    parent_stack = []
+    
+    # Parse CSV
+    csv_reader = csv.DictReader(StringIO(csv_data))
+    
+    for row in csv_reader:
+        # Extract node information based on database engine
+        if db_engine == 'postgresql':
+            node_id = row.get('Node Type', row.get('node_type', 'N'))
+            operation = row.get('Operation', row.get('operation', ''))
+            table_name = row.get('Table Name', row.get('table_name', ''))
+            cost = row.get('Cost', row.get('cost', ''))
+            rows = row.get('Rows', row.get('rows', ''))
+            width = row.get('Width', row.get('width', ''))
+            
+            # Create node label
+            label_parts = [operation]
+            if table_name:
+                label_parts.append(f"on {table_name}")
+            if cost:
+                label_parts.append(f"(cost={cost})")
+            if rows:
+                label_parts.append(f"rows={rows}")
+            if width:
+                label_parts.append(f"width={width}")
+            
+            label = " ".join(label_parts)
+            
+        elif db_engine == 'mysql':
+            node_id = row.get('id', row.get('ID', 'N'))
+            select_type = row.get('select_type', row.get('SELECT_TYPE', ''))
+            table = row.get('table', row.get('TABLE', ''))
+            type_val = row.get('type', row.get('TYPE', ''))
+            key = row.get('key', row.get('KEY', ''))
+            rows = row.get('rows', row.get('ROWS', ''))
+            extra = row.get('extra', row.get('Extra', ''))
+            
+            # Create meaningful label
+            label_parts = []
+            if select_type and select_type != 'NULL':
+                label_parts.append(select_type)
+            
+            if table and table != 'NULL':
+                label_parts.append(f"on {table}")
+            
+            if type_val and type_val != 'NULL':
+                label_parts.append(f"({type_val})")
+            
+            if key and key != 'NULL':
+                label_parts.append(f"key={key}")
+            
+            if rows and rows != 'NULL':
+                label_parts.append(f"rows={rows}")
+            
+            if extra and extra != 'NULL':
+                # Truncate extra info if too long
+                if len(extra) > 30:
+                    extra = extra[:27] + "..."
+                label_parts.append(extra)
+            
+            label = " ".join(label_parts)
+            
+            # Skip empty labels
+            if not label or label.strip() == "":
+                continue
+                
+            operation = select_type  # Use select_type as operation for styling
+            
+        elif db_engine == 'oracle':
+            node_id = row.get('id', row.get('ID', 'N'))
+            operation = row.get('operation', row.get('OPERATION', ''))
+            name = row.get('name', row.get('NAME', ''))
+            rows = row.get('rows', row.get('ROWS', ''))
+            cost = row.get('cost', row.get('COST', ''))
+            
+            label_parts = [operation]
+            if name:
+                label_parts.append(f"on {name}")
+            if cost:
+                label_parts.append(f"(cost={cost})")
+            if rows:
+                label_parts.append(f"rows={rows}")
+            
+            label = " ".join(label_parts)
+            
+        elif db_engine == 'sqlserver':
+            node_id = row.get('node_id', row.get('Node ID', 'N'))
+            physical_op = row.get('physical_op', row.get('Physical Op', ''))
+            logical_op = row.get('logical_op', row.get('Logical Op', ''))
+            table_name = row.get('table_name', row.get('Table Name', ''))
+            estimated_rows = row.get('estimated_rows', row.get('Estimated Rows', ''))
+            
+            label_parts = [physical_op]
+            if logical_op and logical_op != physical_op:
+                label_parts.append(f"({logical_op})")
+            if table_name:
+                label_parts.append(f"on {table_name}")
+            if estimated_rows:
+                label_parts.append(f"rows={estimated_rows}")
+            
+            label = " ".join(label_parts)
+            
+        else:  # Generic
+            node_id = row.get('id', row.get('ID', 'N'))
+            operation = row.get('operation', row.get('Operation', ''))
+            table = row.get('table', row.get('Table', ''))
+            
+            label_parts = [operation]
+            if table:
+                label_parts.append(f"on {table}")
+            
+            label = " ".join(label_parts)
+        
+        # Create unique node ID
+        unique_id = f"N{node_id}"
+        node_id_map[node_id] = unique_id
+        
+        # Add node with simple styling (no CSS classes for now)
+        nodes.append(f'{unique_id}["{label}"]')
+        
+        # Handle parent-child relationships
+        parent_id = row.get('parent_id', row.get('Parent ID', ''))
+        if parent_id and parent_id in node_id_map:
+            edges.append(f'{node_id_map[parent_id]} --> {unique_id}')
+    
+    if nodes:
+        return 'graph TD\n' + '\n'.join(nodes + edges)
+    
+    return None
+
+def parse_text_explain_plan(text_data, db_engine):
+    """Parse text-formatted EXPLAIN plan data with robust hierarchical parsing"""
+    nodes = []
+    edges = []
+    node_id_map = {}
+    parent_stack = []
+    lines = text_data.strip().split('\n')
+    skip_patterns = ['---', '===', 'QUERY PLAN', 'Planning Time:', 'Execution Time:']
+    for i, line in enumerate(lines):
+        line = line.strip()
+        if not line or any(pattern in line for pattern in skip_patterns):
+            continue
+        original_line = lines[i]
+        indent = len(original_line) - len(original_line.lstrip())
+        if db_engine == 'oracle':
+            # Try pipe-delimited table format first
+            if '|' in line and not line.startswith('|--'):
+                if 'Id' in line and 'Operation' in line:
+                    continue
+                if line.startswith('|----'):
+                    continue
+                parts = [part.strip() for part in line.split('|')]
+                if len(parts) >= 3:
+                    id_val = parts[1]
+                    operation = parts[2]
+                    name = parts[3] if len(parts) > 3 else ''
+                    rows = parts[4] if len(parts) > 4 else ''
+                    cost = parts[5] if len(parts) > 5 else ''
+                    label_parts = []
+                    if operation and operation != 'NULL':
+                        label_parts.append(operation)
+                    if name and name != 'NULL':
+                        label_parts.append(f"on {name}")
+                    if cost and cost != 'NULL':
+                        label_parts.append(f"cost={cost}")
+                    if rows and rows != 'NULL':
+                        label_parts.append(f"rows={rows}")
+                    label = " ".join(label_parts)
+                    if not label or label.strip() == "":
+                        continue
+                    if len(label) > 80:
+                        label = label[:77] + "..."
+                    node_id = f"N{i}"
+                    nodes.append(f'{node_id}["{label}"]')
+                    if len(nodes) > 1:
+                        prev_node = f"N{i-1}"
+                        edges.append(f'{prev_node} --> {node_id}')
+                    continue
+            # Indented tree-like format (fallback)
+            # e.g. SELECT STATEMENT\n  HASH JOIN\n    TABLE ACCESS FULL USERS\n    TABLE ACCESS FULL ORDERS
+            label = line.strip()
+            if not label:
+                continue
+            if len(label) > 80:
+                label = label[:77] + "..."
+            node_id = f"N{i}"
+            nodes.append(f'{node_id}["{label}"]')
+            # Infer parent-child from indentation
+            while parent_stack and indent <= parent_stack[-1][1]:
+                parent_stack.pop()
+            if parent_stack:
+                parent_id = parent_stack[-1][0]
+                edges.append(f'{parent_id} --> {node_id}')
+            parent_stack.append((node_id, indent))
+        elif db_engine == 'postgresql':
+            # ... existing code ...
+            pass  # Unchanged
+        elif db_engine == 'mysql':
+            # ... existing code ...
+            pass  # Unchanged
+        elif db_engine == 'sqlserver':
+            # ... existing code ...
+            pass  # Unchanged
+        else:
+            # Generic fallback
+            if line.strip():
+                label = line.strip()
+                if len(label) > 80:
+                    label = label[:77] + "..."
+                node_id = f"N{i}"
+                nodes.append(f'{node_id}["{label}"]')
+                if len(nodes) > 1:
+                    prev_node = f"N{i-1}"
+                    edges.append(f'{prev_node} --> {node_id}')
+    if nodes:
+        mermaid_code = 'graph TD\n' + '\n'.join(nodes)
+        if edges:
+            mermaid_code += '\n' + '\n'.join(edges)
+        return mermaid_code
+    return None
+
+def get_node_style(operation, db_engine):
+    """Get Mermaid.js styling for different operation types"""
+    operation_lower = operation.lower()
+    
+    # Define color schemes for different operation types
+    if any(scan in operation_lower for scan in ['seq scan', 'table scan', 'full scan', 'table access full']):
+        return ':::seq-scan'
+    elif any(scan in operation_lower for scan in ['index scan', 'index range scan', 'index seek']):
+        return ':::index-scan'
+    elif any(join in operation_lower for join in ['hash join', 'nested loop', 'merge join', 'join']):
+        return ':::join'
+    elif any(agg in operation_lower for agg in ['aggregate', 'group', 'sort']):
+        return ':::aggregate'
+    elif any(filter in operation_lower for filter in ['filter', 'where']):
+        return ':::filter'
+    elif any(result in operation_lower for result in ['result', 'output']):
+        return ':::result'
+    else:
+        return ':::default'
+
+def get_alias_to_table_mapping(sql_query):
+    import re
+    alias_to_table = {}
+    from_join_pattern = re.compile(r'(FROM|JOIN)\s+([\w\"]+)(?:\s+AS)?\s+(\w+)', re.IGNORECASE)
+    for match in from_join_pattern.finditer(sql_query):
+        real_table = match.group(2).replace('"', '')
+        alias = match.group(3)
+        alias_to_table[alias] = real_table
+    return alias_to_table
+
+def get_real_column_index_recommendations(sql_query, indexes, alias_to_table, tables):
+    import re
+    where_cols = set()
+    orderby_cols = set()
+    join_cols = set()
+    for match in re.finditer(r'WHERE\s+([\w\.]+)', sql_query, re.IGNORECASE):
+        col = match.group(1)
+        where_cols.add(col)
+    for match in re.finditer(r'JOIN\s+\w+\s+ON\s+([\w\.]+)', sql_query, re.IGNORECASE):
+        col = match.group(1)
+        join_cols.add(col)
+    for match in re.finditer(r'ORDER BY\s+([\w\.]+)', sql_query, re.IGNORECASE):
+        col = match.group(1)
+        orderby_cols.add(col)
+    user_indexes = parse_user_indexes(indexes)
+    index_recs = {}
+    for col in where_cols | join_cols | orderby_cols:
+        # Only recommend for real columns in real tables (not aggregates/aliases)
+        if col and '.' in col:
+            alias, column = col.split('.', 1)
+            real_table = alias_to_table.get(alias, alias)
+            # Check if real_table is in tables
+            if real_table not in [t['name'] for t in tables]:
+                continue
+            # Skip aggregates/aliases
+            if re.match(r'\d+$', column) or column.lower() in ['count', 'sum', 'avg', 'min', 'max', 'order_count']:
+                continue
+            # SKIP if already indexed
+            if column.lower() in user_indexes.get(real_table.lower(), set()):
+                continue
+            rec_text = f"Consider creating an index on column '{column}' in table '{real_table}' for better performance."
+            ddl_text = f"CREATE INDEX idx_{real_table}_{column}_auto ON {real_table}({column});"
+            key = ('index', real_table, column)
+            if key not in index_recs:
+                index_recs[key] = {'text': rec_text, 'actionable': True, 'sub': [{'text': ddl_text, 'actionable': False}], 'key': key}
+            else:
+                if not any(sub['text'] == ddl_text for sub in index_recs[key]['sub']):
+                    index_recs[key]['sub'].append({'text': ddl_text, 'actionable': False})
+    return list(index_recs.values())
+
+def extract_fts_tables_from_explain(explain_plan, db_engine):
+    """
+    Extract all tables accessed via full table scan from the EXPLAIN plan using EXPLAIN_KEYWORDS.
+    Returns a set of table names.
+    Improved for Oracle: robustly extract table names from lines like 'TABLE ACCESS FULL USERS' and pipe-formatted plans.
+    """
+    from explain_keywords import EXPLAIN_KEYWORDS
+    fts_tables = set()
+    if not explain_plan:
+        return fts_tables
+    # Normalize line endings and strip whitespace
+    plan_lines = [l.strip() for l in explain_plan.strip().split('\n') if l.strip()]
+    keywords = EXPLAIN_KEYWORDS.get(db_engine, {})
+    scan_keywords = set(keywords.get('sequential', []) + keywords.get('table', []) + keywords.get('full_scan', []) + keywords.get('scan', []))
+    for line in plan_lines:
+        # Oracle pipe format: | 3 | TABLE ACCESS FULL | DEPARTMENTS | 27 | 3 (0) |
+        if db_engine == 'oracle' and '|' in line:
+            parts = [p.strip() for p in line.strip('|').split('|')]
+            if len(parts) >= 3:
+                op = parts[1].upper()
+                table = parts[2]
+                for kw in scan_keywords:
+                    if kw.upper() in op:
+                        if table and table.upper() not in {'', 'N/A', 'VW_SQ_1'}:
+                            fts_tables.add(table)
+        else:
+            for kw in scan_keywords:
+                if kw.lower() in line.lower():
+                    m = re.search(rf"{re.escape(kw)}[\s]+([\w\"\[\]]+)", line, re.IGNORECASE)
+                    if m:
+                        table = m.group(1).replace('"', '').replace('[', '').replace(']', '')
+                        fts_tables.add(table)
+                    else:
+                        parts = line.strip().split()
+                        if len(parts) > 0:
+                            table = parts[-1].replace('"', '').replace('[', '').replace(']', '')
+                            if table.upper() not in {'FULL', 'ACCESS', 'TABLE', 'SCAN', 'INDEX', 'HASH', 'JOIN', 'STATEMENT'}:
+                                fts_tables.add(table)
+    return fts_tables
+
+# In each analyze_* function, after parsing the EXPLAIN plan:
+# 1. Call extract_fts_tables_from_explain(explain_plan, db_engine)
+# 2. For each FTS table, if not already indexed, recommend an index on the best predicate column (from WHERE/JOIN), or recommend review if no predicate found.
+# 3. Ensure all FTS tables are covered in recommendations.
+
+def extract_explain_plan_metrics(explain_plan, db_engine):
+    """
+    Parse EXPLAIN plan for actual rows scanned, cost, memory/bytes, and estimated time for all engines.
+    Returns a dict: {rows_scanned, cost, memory, time}
+    """
+    metrics = {'rows_scanned': None, 'cost': None, 'memory': None, 'time': None}
+    if not explain_plan:
+        return metrics
+    plan_lines = explain_plan.strip().split('\n')
+    # Try CSV first if it looks like CSV
+    if any(',' in line for line in plan_lines[:3]):
+        try:
+            csv_reader = csv.DictReader(StringIO(explain_plan))
+            rows_list, cost_list, mem_list, time_list = [], [], [], []
+            for row in csv_reader:
+                for k, v in row.items():
+                    if v is None or v == '' or v == 'NULL':
+                        continue
+                    kl = k.lower()
+                    if 'row' in kl and v.isdigit():
+                        rows_list.append(int(v))
+                    if 'cost' in kl and v.replace('.', '', 1).isdigit():
+                        cost_list.append(float(v))
+                    if 'byte' in kl and v.isdigit():
+                        mem_list.append(int(v))
+                    if 'mem' in kl and v.replace('.', '', 1).isdigit():
+                        mem_list.append(float(v))
+                    if 'time' in kl and v.replace('.', '', 1).isdigit():
+                        time_list.append(float(v))
+            if rows_list:
+                metrics['rows_scanned'] = max(rows_list)
+            if cost_list:
+                metrics['cost'] = max(cost_list)
+            if mem_list:
+                metrics['memory'] = max(mem_list)
+            if time_list:
+                metrics['time'] = max(time_list)
+            return metrics
+        except Exception:
+            pass
+    # Text parsing by engine
+    if db_engine == 'postgresql':
+        # e.g. Seq Scan on users  (cost=0.00..431.00 rows=21000 width=4)
+        rows_list, cost_list, mem_list, time_list = [], [], [], []
+        for line in plan_lines:
+            m = re.search(r'rows=(\d+)', line)
+            if m:
+                rows_list.append(int(m.group(1)))
+            m = re.search(r'cost=([\d\.]+)\.\.([\d\.]+)', line)
+            if m:
+                cost_list.append(float(m.group(2)))
+            m = re.search(r'width=(\d+)', line)
+            if m:
+                mem_list.append(int(m.group(1)))
+        if rows_list:
+            metrics['rows_scanned'] = max(rows_list)
+        if cost_list:
+            metrics['cost'] = max(cost_list)
+        if mem_list:
+            metrics['memory'] = max(mem_list)
+    elif db_engine == 'mysql':
+        # e.g. | id | select_type | table | type | rows | Extra |
+        for line in plan_lines:
+            m = re.search(r'rows=?(\d+)', line)
+            if m:
+                metrics['rows_scanned'] = max(metrics['rows_scanned'] or 0, int(m.group(1))) if metrics['rows_scanned'] else int(m.group(1))
+            m = re.search(r'Using\s+filesort', line, re.IGNORECASE)
+            if m:
+                metrics['cost'] = (metrics['cost'] or 0) + 10
+        # MySQL EXPLAIN rarely gives memory/time directly
+    elif db_engine == 'oracle':
+        # Pipe/table or indented
+        for line in plan_lines:
+            m = re.search(r'rows=?(\d+)', line)
+            if m:
+                metrics['rows_scanned'] = max(metrics['rows_scanned'] or 0, int(m.group(1))) if metrics['rows_scanned'] else int(m.group(1))
+            m = re.search(r'cost=?(\d+)', line)
+            if m:
+                metrics['cost'] = max(metrics['cost'] or 0, int(m.group(1))) if metrics['cost'] else int(m.group(1))
+            m = re.search(r'bytes=?(\d+)', line)
+            if m:
+                metrics['memory'] = max(metrics['memory'] or 0, int(m.group(1))) if metrics['memory'] else int(m.group(1))
+    elif db_engine == 'sqlserver':
+        for line in plan_lines:
+            m = re.search(r'Estimated Rows=?(\d+)', line, re.IGNORECASE)
+            if m:
+                metrics['rows_scanned'] = max(metrics['rows_scanned'] or 0, int(m.group(1))) if metrics['rows_scanned'] else int(m.group(1))
+            m = re.search(r'Estimated Total Subtree Cost=([\d\.]+)', line, re.IGNORECASE)
+            if m:
+                metrics['cost'] = max(metrics['cost'] or 0, float(m.group(1))) if metrics['cost'] else float(m.group(1))
+            m = re.search(r'Memory Grant=([\d\.]+)', line, re.IGNORECASE)
+            if m:
+                metrics['memory'] = max(metrics['memory'] or 0, float(m.group(1))) if metrics['memory'] else float(m.group(1))
+    elif db_engine == 'sqlite':
+        for line in plan_lines:
+            m = re.search(r'rows=?(\d+)', line)
+            if m:
+                metrics['rows_scanned'] = max(metrics['rows_scanned'] or 0, int(m.group(1))) if metrics['rows_scanned'] else int(m.group(1))
+    return metrics
+
+def parse_user_indexes(indexes):
+    """
+    Parse user-provided index definitions and return {table: set(columns)} for fast lookup.
+    Supports multi-column indexes and different syntaxes for all engines.
+    """
+    table_to_indexed_cols = {}
+    for idx in indexes:
+        defn = idx.get('definition') or idx.get('ddl') or ''
+        # Try to extract table and columns from CREATE INDEX ... ON table(col1, col2, ...)
+        m = re.search(r'CREATE\s+INDEX\s+\w+\s+ON\s+([\w\"\[\]]+)\s*\(([^)]+)\)', defn, re.IGNORECASE)
+        if m:
+            table = m.group(1).replace('"', '').replace('[', '').replace(']', '').lower()
+            cols = [c.strip().lower() for c in m.group(2).split(',')]
+            table_to_indexed_cols.setdefault(table, set()).update(cols)
+            continue
+        # MySQL/SQL Server: CREATE INDEX ... ON table (col1, col2)
+        m = re.search(r'ON\s+([\w\"\[\]]+)\s*\(([^)]+)\)', defn, re.IGNORECASE)
+        if m:
+            table = m.group(1).replace('"', '').replace('[', '').replace(']', '').lower()
+            cols = [c.strip().lower() for c in m.group(2).split(',')]
+            table_to_indexed_cols.setdefault(table, set()).update(cols)
+            continue
+        # Oracle: CREATE INDEX ... ON "TABLE" ("COL1", ...)
+        m = re.search(r'ON\s+"?([\w]+)"?\s*\(([^)]+)\)', defn, re.IGNORECASE)
+        if m:
+            table = m.group(1).lower()
+            cols = [c.replace('"', '').strip().lower() for c in m.group(2).split(',')]
+            table_to_indexed_cols.setdefault(table, set()).update(cols)
+    return table_to_indexed_cols
+
+# Update recommend_indexes_for_fts_tables to use parse_user_indexes
+
+def recommend_indexes_for_fts_tables(sql_query, indexes, alias_to_table, tables, explain_plan, db_engine):
+    """
+    For every FTS table detected in the EXPLAIN plan, recommend an index on the best predicate column (from WHERE/JOIN/ORDER BY),
+    or a review if no predicate is found. If an index exists but FTS still occurs, recommend investigation steps.
+    Never recommend both a new index and investigation for the same table.
+    """
+    fts_tables = extract_fts_tables_from_explain(explain_plan, db_engine)
+    where_cols = set()
+    orderby_cols = set()
+    join_cols = set()
+    for match in re.finditer(r'WHERE\s+([\w\.]+)', sql_query, re.IGNORECASE):
+        col = match.group(1)
+        where_cols.add(col)
+    for match in re.finditer(r'JOIN\s+\w+\s+ON\s+([\w\.]+)', sql_query, re.IGNORECASE):
+        col = match.group(1)
+        join_cols.add(col)
+    for match in re.finditer(r'ORDER BY\s+([\w\.]+)', sql_query, re.IGNORECASE):
+        col = match.group(1)
+        orderby_cols.add(col)
+    user_indexes = parse_user_indexes(indexes)
+    recs = []
+    for fts_table in fts_tables:
+        fts_table_lc = fts_table.lower()
+        investigation_given = False
+        # Check if any relevant predicate column already has an index
+        for col in where_cols | join_cols | orderby_cols:
+            if col and '.' in col:
+                alias, column = col.split('.', 1)
+                real_table = alias_to_table.get(alias, alias).lower()
+                column_lc = column.lower()
+                if real_table == fts_table_lc:
+                    # Skip aggregates/aliases
+                    if re.match(r'\d+$', column_lc) or column_lc in ['count', 'sum', 'avg', 'min', 'max', 'order_count']:
+                        continue
+                    if column_lc in user_indexes.get(real_table, set()):
+                        # Only investigation advice, never a new index for this table
+                        rec_text = (f"Table '{fts_table}' is accessed via Full Table Scan even though an index exists on '{column}'. "
+                                    f"Consider running ANALYZE/UPDATE STATISTICS, checking for data skew or NULLs, or using a query hint to encourage index usage.")
+                        key = ('fts_index_exists', fts_table, column)
+                        recs.append({'text': rec_text, 'actionable': True, 'sub': [], 'key': key})
+                        investigation_given = True
+                        break
+        if not investigation_given:
+            # Only recommend a new index if no relevant predicate column has an index
+            best_col = None
+            for col in where_cols | join_cols | orderby_cols:
+                if col and '.' in col:
+                    alias, column = col.split('.', 1)
+                    real_table = alias_to_table.get(alias, alias).lower()
+                    column_lc = column.lower()
+                    if real_table == fts_table_lc:
+                        # Skip aggregates/aliases
+                        if re.match(r'\d+$', column_lc) or column_lc in ['count', 'sum', 'avg', 'min', 'max', 'order_count']:
+                            continue
+                        best_col = column
+                        break
+            if best_col:
+                rec_text = f"Consider creating an index on column '{best_col}' in table '{fts_table}' for better performance (Full Table Scan detected)."
+                ddl_text = f"CREATE INDEX idx_{fts_table}_{best_col}_auto ON {fts_table}({best_col});"
+                key = ('fts_index', fts_table, best_col)
+                recs.append({'text': rec_text, 'actionable': True, 'sub': [{'text': ddl_text, 'actionable': False}], 'key': key})
+            else:
+                rec_text = f"Table '{fts_table}' is accessed via Full Table Scan. Review for possible indexing or query rewrite."
+                key = ('fts_review', fts_table)
+                recs.append({'text': rec_text, 'actionable': True, 'sub': [], 'key': key})
+    return recs
+
+@app.errorhandler(CSRFError)
+def handle_csrf_error(e):
+    return render_template('csrf_error.html', reason=e.description), 400
+
+def detect_engine_from_explain(explain_plan):
+    """
+    Heuristically detect the likely DB engine from the EXPLAIN plan string.
+    Returns one of: 'oracle', 'mysql', 'postgresql', 'sqlserver', 'sqlite', or None.
+    """
+    if not explain_plan:
+        return None
+    plan = explain_plan.strip().lower()
+    # SQL Server: |--, Clustered Index Scan, Hash Match, Nested Loops, etc.
+    if '|--' in plan or 'clustered index scan' in plan or 'hash match' in plan or 'nested loops' in plan:
+        return 'sqlserver'
+    # Oracle: pipe format, TABLE ACCESS FULL, COST (%CPU)
+    if 'table access full' in plan or 'cost (%cpu)' in plan or '| id  | operation' in plan:
+        return 'oracle'
+    # MySQL: id, select_type, table, type, rows, Extra
+    if 'select_type' in plan and 'rows' in plan and 'extra' in plan:
+        return 'mysql'
+    if '| id |' in plan and '| table |' in plan:
+        return 'mysql'
+    # PostgreSQL: Seq Scan, Index Scan, cost=, width=
+    if 'seq scan' in plan or 'index scan' in plan or 'cost=' in plan or 'width=' in plan:
+        return 'postgresql'
+    # SQLite: SCAN TABLE, SEARCH TABLE
+    if 'scan table' in plan or 'search table' in plan:
+        return 'sqlite'
+    return None
+
+def detect_explain_format(explain_plan):
+    if not explain_plan:
+        return 'unknown'
+    plan_text = explain_plan.strip()
+    # SQL Server tree format (prioritize this check)
+    if '|--' in plan_text or 'Clustered Index Scan' in plan_text or 'Hash Match' in plan_text or 'Nested Loops' in plan_text:
+        return 'sqlserver'
+    # Check for JSON format
+    if (plan_text.startswith('[') and plan_text.endswith(']')) or \
+       (plan_text.startswith('{') and plan_text.endswith('}')):
+        try:
+            json.loads(plan_text)
+            return 'json'
+        except json.JSONDecodeError:
+            pass
+    # Check for XML format (SQL Server ShowPlanXML)
+    if plan_text.startswith('<') or '<RelOp' in plan_text or '<ShowPlanXML' in plan_text:
+        return 'xml'
+    # Check for SQL Server specific formats (table style)
+    if any(keyword in plan_text for keyword in [
+        'StmtText', 'PhysicalOp', 'LogicalOp', 'EstimateRows', 'EstimateIO', 'EstimateCPU', 'TotalSubtreeCost',
+        'HashAggregate', 'NodeId', 'PhysicalOp=', 'LogicalOp=', 'EstimateRows='
+    ]):
+        return 'sqlserver'
+    # Check for PostgreSQL text format (has indentation and -> markers)
+    if '->' in plan_text or 'Planning Time:' in plan_text or 'Execution Time:' in plan_text:
+        return 'postgresql_text'
+    # Check for Oracle format (pipe-delimited or table format)
+    if '|' in plan_text and ('Id' in plan_text or 'OPERATION' in plan_text):
+        return 'oracle'
+    # Default to text format
+    return 'text'
+
+def parse_explain_to_json(explain_plan, db_engine):
+    """Parse explain plan with format detection and routing"""
+    if not explain_plan:
+        return None
+    
+    # Auto-detect format
+    detected_format = detect_explain_format(explain_plan)
+    
+    # Route to appropriate parser based on engine and format
+    if db_engine == 'postgresql':
+        if detected_format == 'json':
+            return parse_postgresql_json(explain_plan)
+        elif detected_format == 'xml':
+            return parse_postgresql_xml(explain_plan)
+        elif detected_format == 'postgresql_text':
+            return parse_postgresql_text(explain_plan)
+        else:
+            return parse_postgresql_text(explain_plan)  # fallback
+    elif db_engine == 'oracle':
+        if detected_format == 'oracle':
+            return parse_oracle_explain_flow(explain_plan)
+        else:
+            return parse_oracle_explain_flow(explain_plan)  # fallback
+    elif db_engine == 'sqlserver':
+        if detected_format == 'sqlserver':
+            return parse_sqlserver_explain_flow(explain_plan)
+        elif detected_format == 'xml':
+            return parse_sqlserver_xml(explain_plan)
+        else:
+            return parse_sqlserver_explain_flow(explain_plan)  # fallback
+    
+    return None
+
+def parse_postgresql_json(explain_plan):
+    """Parse PostgreSQL JSON format - richest data source"""
+    try:
+        data = json.loads(explain_plan)
+        return extract_from_postgresql_json(data)
+    except json.JSONDecodeError as e:
+        print(f"JSON parsing error: {e}")
+        return None
+
+def extract_from_postgresql_json(data):
+    """Extract execution tree from PostgreSQL JSON format"""
+    if not data or not isinstance(data, list) or len(data) == 0:
+        return None
+    
+    # PostgreSQL JSON format: [{"Plan": {...}}]
+    plan_data = data[0].get('Plan', {})
+    
+    execution_tree = {
+        'operation': 'Query Execution Plan',
+        'cost': 0,
+        'rows': 0,
+        'time': 0,
+        'buffers': {},
+        'children': []
+    }
+    
+    def extract_node_data(node):
+        """Extract metrics from a JSON node"""
+        node_data = {
+            'operation': node.get('Node Type', 'Unknown Operation'),
+            'cost': node.get('Total Cost', 0),
+            'startup_cost': node.get('Startup Cost', 0),
+            'rows': node.get('Actual Rows', node.get('Plan Rows', 0)),
+            'time': node.get('Actual Total Time', 0),
+            'buffers': node.get('Buffers', {}),
+            'children': []
+        }
+        
+        # Add relation name if available
+        if node.get('Relation Name'):
+            node_data['operation'] += f" on {node.get('Relation Name')}"
+        
+        # Add index name if available
+        if node.get('Index Name'):
+            node_data['operation'] += f" using {node.get('Index Name')}"
+        
+        # Add scan direction if available
+        if node.get('Scan Direction'):
+            node_data['operation'] += f" ({node.get('Scan Direction')})"
+        
+        # Add filter conditions if available
+        if node.get('Filter'):
+            node_data['filter'] = node.get('Filter')
+        
+        # Add join conditions if available
+        if node.get('Hash Cond'):
+            node_data['join_condition'] = node.get('Hash Cond')
+        
+        # Process children
+        if 'Plans' in node:
+            for child in node['Plans']:
+                child_data = extract_node_data(child)
+                node_data['children'].append(child_data)
+        
+        return node_data
+    
+    # Extract the main plan
+    main_plan = extract_node_data(plan_data)
+    execution_tree.update(main_plan)
+    
+    return execution_tree
+
+def parse_postgresql_xml(explain_plan):
+    """Parse PostgreSQL XML format"""
+    # TODO: Implement XML parsing for PostgreSQL
+    # For now, fallback to text parsing
+    return parse_postgresql_text(explain_plan)
+
+def parse_postgresql_text(explain_plan):
+    """Parse PostgreSQL TEXT format - enhanced version"""
+    lines = explain_plan.strip().split('\n')
+    
+    # Skip header lines
+    skip_patterns = ['Planning Time:', 'Execution Time:', 'QUERY PLAN', '---']
+    filtered_lines = []
+    for line in lines:
+        if not any(pattern in line for pattern in skip_patterns):
+            filtered_lines.append(line)
+    
+    if not filtered_lines:
+        return None
+    
+    # Parse the execution flow based on indentation
+    execution_tree = {
+        'operation': 'Query Execution Plan',
+        'cost': 0,
+        'rows': 0,
+        'time': 0,
+        'buffers': {},
+        'children': []
+    }
+    
+    # Stack to track parent nodes based on indentation
+    node_stack = [execution_tree]
+    indent_stack = [-1]  # Track indentation levels
+    
+    for line in filtered_lines:
+        if not line.strip():
+            continue
+            
+        # Calculate indentation level (count leading spaces or ->)
+        original_line = line
+        indent_level = 0
+        while line.startswith('  ') or line.startswith('-> '):
+            if line.startswith('-> '):
+                indent_level += 1
+                line = line[3:]
+            else:
+                indent_level += 1
+                line = line[2:]
+        
+        # Parse operation and metrics
+        operation, metrics = parse_enhanced_postgresql_line(line)
+        
+        if not operation:
+            continue
+        
+        # Create node
+        node = {
+            'operation': operation,
+            'cost': metrics.get('cost', 0),
+            'startup_cost': metrics.get('startup_cost', 0),
+            'rows': metrics.get('rows', 0),
+            'time': metrics.get('time', 0),
+            'buffers': metrics.get('buffers', {}),
+            'filter': metrics.get('filter'),
+            'join_condition': metrics.get('join_condition'),
+            'children': []
+        }
+        
+        # Find the correct parent based on indentation
+        while len(indent_stack) > 1 and indent_level <= indent_stack[-1]:
+            node_stack.pop()
+            indent_stack.pop()
+        
+        # Add to current parent
+        node_stack[-1]['children'].append(node)
+        
+        # Push this node onto stack for potential children
+        node_stack.append(node)
+        indent_stack.append(indent_level)
+    
+    return execution_tree
+
+def parse_enhanced_postgresql_line(line):
+    """Parse a single PostgreSQL operation line with enhanced metrics"""
+    line = line.strip()
+    
+    # Extract metrics from parentheses
+    metrics = {}
+    operation = line
+    
+    # Look for metrics in parentheses
+    if ' (cost=' in line:
+        parts = line.split(' (cost=', 1)
+        operation = parts[0].strip()
+        metrics_str = 'cost=' + parts[1]
+        
+        # Parse startup and total cost
+        cost_match = re.search(r'cost=([\d.]+)\.\.([\d.]+)', metrics_str)
+        if cost_match:
+            metrics['startup_cost'] = float(cost_match.group(1))
+            metrics['cost'] = float(cost_match.group(2))
+        
+        # Parse rows
+        rows_match = re.search(r'rows=(\d+)', metrics_str)
+        if rows_match:
+            metrics['rows'] = int(rows_match.group(1))
+        
+        # Parse actual time if available
+        time_match = re.search(r'actual time=([\d.]+)\.\.([\d.]+)', metrics_str)
+        if time_match:
+            metrics['time'] = float(time_match.group(2))  # Use end time
+        
+        # Parse width
+        width_match = re.search(r'width=(\d+)', metrics_str)
+        if width_match:
+            metrics['width'] = int(width_match.group(1))
+        
+        # Parse buffer information
+        buffers_match = re.search(r'Buffers: (.*?)(?:\s|$)', metrics_str)
+        if buffers_match:
+            buffers_str = buffers_match.group(1)
+            metrics['buffers'] = parse_buffer_info(buffers_str)
+    
+    # Extract filter conditions
+    filter_match = re.search(r'Filter: (.+?)(?:\s|$)', line)
+    if filter_match:
+        metrics['filter'] = filter_match.group(1)
+    
+    # Extract join conditions
+    join_match = re.search(r'Hash Cond: (.+?)(?:\s|$)', line)
+    if join_match:
+        metrics['join_condition'] = join_match.group(1)
+    
+    # Clean up operation name
+    operation = operation.replace('_', ' ').title()
+    
+    return operation, metrics
+
+def parse_buffer_info(buffers_str):
+    """Parse PostgreSQL buffer information"""
+    buffers = {}
+    
+    # Parse shared hit/read/written
+    shared_hit = re.search(r'shared hit=(\d+)', buffers_str)
+    if shared_hit:
+        buffers['shared_hit'] = int(shared_hit.group(1))
+    
+    shared_read = re.search(r'shared read=(\d+)', buffers_str)
+    if shared_read:
+        buffers['shared_read'] = int(shared_read.group(1))
+    
+    shared_written = re.search(r'shared written=(\d+)', buffers_str)
+    if shared_written:
+        buffers['shared_written'] = int(shared_written.group(1))
+    
+    return buffers
+
+def parse_sqlserver_xml(explain_plan):
+    """Parse SQL Server XML format"""
+    # TODO: Implement XML parsing for SQL Server
+    # For now, fallback to text parsing
+    return parse_sqlserver_explain_flow(explain_plan)
+
 def analyze_execution_plan_metrics(execution_tree, db_engine):
     """Analyze execution plan metrics and generate optimization recommendations"""
     recommendations = []
     warnings = []
     performance_insights = []
     
-    # Handle case where execution_tree might be a string
-    if isinstance(execution_tree, str):
-        try:
-            import json
-            execution_tree = json.loads(execution_tree)
-        except (json.JSONDecodeError, TypeError):
-            return recommendations, warnings, performance_insights
-    
-    # Ensure execution_tree is a dictionary/object
-    if not execution_tree or not isinstance(execution_tree, dict) or not execution_tree.get('children'):
+    if not execution_tree or not execution_tree.get('children'):
         return recommendations, warnings, performance_insights
     
     # Collect all nodes and their metrics
     all_nodes = []
     def collect_nodes(node, depth=0):
-        """Recursively traverse nodes to collect statistics"""
-        if not node or not isinstance(node, dict):
-            return
-        
-        # Extract node information with safe defaults
-        operation = node.get('operation', '')
-        table_name = node.get('table_name', '')
-        cost = float(node.get('cost', 0)) if node.get('cost') is not None else 0
-        time = float(node.get('time', 0)) if node.get('time') is not None else 0
-        rows = int(node.get('rows', 0)) if node.get('rows') is not None else 0
-        buffers = node.get('buffers', {}) if isinstance(node.get('buffers'), dict) else {}
-        
-        # Add node to collection
         all_nodes.append({
-            'operation': operation,
-            'table_name': table_name,
-            'cost': cost,
-            'time': time,
-            'rows': rows,
-            'buffers': buffers,
-            'depth': depth
+            'node': node,
+            'depth': depth,
+            'operation': node.get('operation', ''),
+            'cost': node.get('cost', 0),
+            'time': node.get('time', 0),
+            'rows': node.get('rows', 0),
+            'buffers': node.get('buffers', {}),
+            'filter': node.get('filter'),
+            'join_condition': node.get('join_condition')
         })
-        
-        # Process children
-        children = node.get('children', [])
-        if isinstance(children, list):
-            for child in children:
-                collect_nodes(child, depth + 1)
+        for child in node.get('children', []):
+            collect_nodes(child, depth + 1)
     
-    # Collect all nodes
     collect_nodes(execution_tree)
     
-    # Analyze performance patterns
+    # Calculate performance metrics
     total_cost = sum(node['cost'] for node in all_nodes)
     total_time = sum(node['time'] for node in all_nodes)
-    total_buffer_reads = sum(node['buffers'].get('shared_read', 0) for node in all_nodes if isinstance(node['buffers'], dict))
+    total_buffer_reads = sum(node['buffers'].get('shared_read', 0) for node in all_nodes)
+    total_buffer_hits = sum(node['buffers'].get('shared_hit', 0) for node in all_nodes)
     
-    # Generate recommendations based on analysis
-    # Skip generic recommendations - let specific recommendations handle this
+    # Find performance hotspots
+    cost_threshold = total_cost * 0.3  # 30% of total cost
+    time_threshold = total_time * 0.3 if total_time > 0 else 0
+    buffer_threshold = total_buffer_reads * 0.3 if total_buffer_reads > 0 else 0
+    
+    hotspots = []
+    for node in all_nodes:
+        if (node['cost'] > cost_threshold or 
+            node['time'] > time_threshold or 
+            node['buffers'].get('shared_read', 0) > buffer_threshold):
+            hotspots.append(node)
+    
+    # Generate specific recommendations based on operation types and metrics
+    for node in all_nodes:
+        operation = node['operation'].lower()
+        
+        # Full Table Scan analysis
+        if any(scan_type in operation for scan_type in ['seq scan', 'table scan', 'full table scan']):
+            if node['cost'] > cost_threshold:
+                recommendations.append({
+                    'text': f"Full Table Scan detected on operation '{node['operation']}' with high cost ({node['cost']:.2f}). Consider adding indexes on columns used in WHERE, JOIN, or ORDER BY clauses.",
+                    'actionable': True,
+                    'priority': 'high',
+                    'type': 'index',
+                    'operation': node['operation'],
+                    'cost': node['cost']
+                })
+                warnings.append(f"High-cost Full Table Scan: {node['operation']} (cost: {node['cost']:.2f})")
+        
+        # Hash Join analysis
+        if 'hash join' in operation:
+            if node['cost'] > cost_threshold:
+                recommendations.append({
+                    'text': f"Hash Join operation '{node['operation']}' has high cost ({node['cost']:.2f}). Consider optimizing join conditions or adding indexes on join columns.",
+                    'actionable': True,
+                    'priority': 'medium',
+                    'type': 'join',
+                    'operation': node['operation'],
+                    'cost': node['cost']
+                })
+        
+        # Nested Loop analysis
+        if 'nested loop' in operation:
+            if node['cost'] > cost_threshold:
+                recommendations.append({
+                    'text': f"Nested Loop Join '{node['operation']}' has high cost ({node['cost']:.2f}). This may indicate missing indexes on inner table join columns.",
+                    'actionable': True,
+                    'priority': 'high',
+                    'type': 'index',
+                    'operation': node['operation'],
+                    'cost': node['cost']
+                })
+        
+        # Sort analysis
+        if 'sort' in operation:
+            if node['cost'] > cost_threshold:
+                recommendations.append({
+                    'text': f"Sort operation '{node['operation']}' has high cost ({node['cost']:.2f}). Consider adding indexes to avoid sorting or using ORDER BY with indexed columns.",
+                    'actionable': True,
+                    'priority': 'medium',
+                    'type': 'index',
+                    'operation': node['operation'],
+                    'cost': node['cost']
+                })
+        
+        # Buffer I/O analysis
+        if node['buffers'].get('shared_read', 0) > buffer_threshold:
+            recommendations.append({
+                'text': f"High I/O operation '{node['operation']}' with {node['buffers']['shared_read']} buffer reads. Consider optimizing data access patterns or adding appropriate indexes.",
+                'actionable': True,
+                'priority': 'medium',
+                'type': 'io',
+                'operation': node['operation'],
+                'buffer_reads': node['buffers']['shared_read']
+            })
+            warnings.append(f"High I/O operation: {node['operation']} ({node['buffers']['shared_read']} reads)")
+        
+        # Filter analysis
+        if node['filter'] and node['cost'] > cost_threshold:
+            recommendations.append({
+                'text': f"Filter operation '{node['operation']}' with condition '{node['filter']}' has high cost ({node['cost']:.2f}). Consider adding indexes on filtered columns.",
+                'actionable': True,
+                'priority': 'medium',
+                'type': 'index',
+                'operation': node['operation'],
+                'filter': node['filter'],
+                'cost': node['cost']
+            })
+    
+    # Generate performance insights
+    if total_cost > 0:
+        performance_insights.append(f"Total estimated cost: {total_cost:.2f}")
+    if total_time > 0:
+        performance_insights.append(f"Total execution time: {total_time:.2f}ms")
+    if total_buffer_reads > 0:
+        performance_insights.append(f"Total buffer reads: {total_buffer_reads:,}")
+        if total_buffer_hits > 0:
+            hit_ratio = total_buffer_hits / (total_buffer_hits + total_buffer_reads) * 100
+            performance_insights.append(f"Buffer hit ratio: {hit_ratio:.1f}%")
+    
+    if hotspots:
+        performance_insights.append(f"Identified {len(hotspots)} performance hotspots")
+    
+    # Add general recommendations based on overall metrics
+    if total_buffer_reads > 1000:
+        recommendations.append({
+            'text': f"High total I/O with {total_buffer_reads:,} buffer reads. Consider reviewing index strategy and query optimization.",
+            'actionable': True,
+            'priority': 'medium',
+            'type': 'general',
+            'buffer_reads': total_buffer_reads
+        })
     
     if total_time > 100:  # 100ms threshold
-        recommendations.append("Slow execution time detected. Review query performance and consider optimization.")
-    
-    if total_buffer_reads > 1000:
-        recommendations.append("High buffer reads detected. Consider adding indexes to reduce I/O operations.")
-    
-    # Check for specific performance issues
-    for node in all_nodes:
-        operation = node.get('operation', '').lower()
-        table_name = node.get('table_name', '')
-        cost = node.get('cost', 0)
-        
-        if 'seq scan' in operation or 'table scan' in operation:
-            # Skip adding warnings - recommendations section already covers this
-            pass
-        
-        if cost > total_cost * 0.5:  # Node takes more than 50% of total cost
-            performance_insights.append(f"High-cost operation: {node.get('operation', '')} on {table_name} (cost: {cost})")
-            # Don't add generic recommendations - let specific FTS recommendations handle this
+        recommendations.append({
+            'text': f"Query execution time of {total_time:.2f}ms is relatively high. Consider query optimization and index improvements.",
+            'actionable': True,
+            'priority': 'medium',
+            'type': 'general',
+            'time': total_time
+        })
     
     return recommendations, warnings, performance_insights
 
@@ -4741,8 +5529,12 @@ def generate_optimization_summary(execution_tree, db_engine):
     
     # Add recommendation summary
     if recommendations:
-        summary.append(f"Generated {len(recommendations)} recommendations")
-        # Don't add individual recommendation details to summary
+        actionable_count = sum(1 for r in recommendations if r.get('actionable'))
+        high_priority_count = sum(1 for r in recommendations if r.get('priority') == 'high')
+        
+        summary.append(f"Generated {len(recommendations)} recommendations ({actionable_count} actionable)")
+        if high_priority_count > 0:
+            summary.append(f"{high_priority_count} high-priority issues identified")
     
     return summary, recommendations, warnings
 
@@ -4762,10 +5554,10 @@ def enhance_analysis_with_execution_plan(analysis_result, execution_tree, db_eng
         # Convert plan recommendations to match existing format
         for rec in plan_recommendations:
             analysis_result['recommendations'].append({
-                'text': rec,
-                'actionable': True,
+                'text': rec['text'],
+                'actionable': rec.get('actionable', True),
                 'sub': [],
-                'key': ('execution_plan', 'optimization', 'medium')
+                'key': (rec.get('type', 'execution_plan'), rec.get('operation', 'unknown'), rec.get('priority', 'medium'))
             })
     
     if 'warnings' in analysis_result:
@@ -4798,92 +5590,6 @@ def enhance_analysis_with_execution_plan(analysis_result, execution_tree, db_eng
         })
     
     return analysis_result
-
-def parse_postgresql_text(explain_plan):
-    """Parse PostgreSQL TEXT format - enhanced version with proper buffer handling"""
-    lines = explain_plan.strip().split('\n')
-    
-    # Skip header lines
-    skip_patterns = ['Planning Time:', 'Execution Time:', 'QUERY PLAN', '---']
-    filtered_lines = []
-    for line in lines:
-        if not any(pattern in line for pattern in skip_patterns):
-            filtered_lines.append(line)
-    
-    if not filtered_lines:
-        return None
-    
-    # Parse the execution flow based on indentation
-    execution_tree = {
-        'operation': 'Query Execution Plan',
-        'cost': 0,
-        'rows': 0,
-        'time': 0,
-        'buffers': {},
-        'children': []
-    }
-    
-    # Stack to track parent nodes based on indentation
-    node_stack = [execution_tree]
-    indent_stack = [-1]  # Track indentation levels
-    current_node = None
-    
-    for i, line in enumerate(filtered_lines):
-        if not line.strip():
-            continue
-            
-        # Calculate indentation level (count leading spaces or ->)
-        original_line = line
-        indent_level = 0
-        while line.startswith('  ') or line.startswith('-> '):
-            if line.startswith('-> '):
-                indent_level += 1
-                line = line[3:]
-            else:
-                indent_level += 1
-                line = line[2:]
-        
-        # Check if this is a buffer line
-        if 'Buffers:' in line:
-            if current_node:
-                # Parse buffer information and add to current node
-                buffers_str = line.strip()
-                current_node['buffers'] = parse_buffer_info(buffers_str)
-            continue
-        
-        # Parse operation and metrics
-        operation, metrics = parse_enhanced_postgresql_line(line)
-        
-        if not operation:
-            continue
-        
-        # Create node
-        node = {
-            'operation': operation,
-            'cost': metrics.get('cost', 0),
-            'startup_cost': metrics.get('startup_cost', 0),
-            'rows': metrics.get('rows', 0),
-            'time': metrics.get('time', 0),
-            'buffers': metrics.get('buffers', {}),
-            'filter': metrics.get('filter'),
-            'join_condition': metrics.get('join_condition'),
-            'children': []
-        }
-        
-        # Find the correct parent based on indentation
-        while len(indent_stack) > 1 and indent_level <= indent_stack[-1]:
-            node_stack.pop()
-            indent_stack.pop()
-        
-        # Add to current parent
-        node_stack[-1]['children'].append(node)
-        
-        # Push this node onto stack for potential children
-        node_stack.append(node)
-        indent_stack.append(indent_level)
-        current_node = node
-    
-    return execution_tree
 
 if __name__ == '__main__':
     app.run(debug=True) 

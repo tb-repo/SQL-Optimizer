@@ -1,0 +1,6 @@
+[33m6818c3d[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mlatest[m[33m, [m[1;31morigin/latest[m[33m)[m Resolve merge conflicts in app.py, static/scripts.js, and templates/index.html
+[33m1a519af[m[33m ([m[1;32mcursor/make-loadsampledata-engine-aware-and-update-button-b141[m[33m)[m Fix visualization issues: container dragging, text overlap, and add scan operation highlighting
+[33m253b500[m checkpoint before checking out cursor/make-loadsampledata-engine-aware-and-update-button-b141
+[33m5c2d28f[m[33m ([m[1;31morigin/cursor/make-loadsampledata-engine-aware-and-update-button-b141[m[33m)[m Update database sample queries with complex sales and inventory analysis
+[33m8ff6f0b[m Add sample database engine data and dynamic sample loading function
+[33mb9211c4[m[33m ([m[1;32mmaster[m[33m)[m Initial commit: SQL Performance Assistant with advanced execution plan visualization

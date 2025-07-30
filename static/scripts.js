@@ -665,12 +665,158 @@ function generateExplainVisualization() {
                 output.appendChild(warningsDiv);
             }
             
-            // Ensure D3 is loaded before rendering
-            ensureD3Loaded(() => {
-                renderD3Tree(data.json_tree, output);
-            });
+            // Display comprehensive statistics if available (similar to explain.depesz.com)
+            if (data.plan_statistics && Object.keys(data.plan_statistics).length > 0) {
+                const stats = data.plan_statistics;
+                
+                // I/O Statistics
+                if (stats.io_stats && Object.keys(stats.io_stats).length > 0) {
+                    const ioStatsDiv = document.createElement('div');
+                    ioStatsDiv.className = 'stats-card';
+                    ioStatsDiv.innerHTML = `
+                        <div class="card-header">
+                            <h6 class="mb-0"><i class="fas fa-hdd me-2"></i>I/O Statistics</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                ${stats.io_stats.total_io_mb ? `
+                                    <div class="col-md-3 mb-2">
+                                        <small class="text-muted">Total I/O (MB)</small>
+                                        <div class="h6 mb-0">${stats.io_stats.total_io_mb}</div>
+                                    </div>
+                                ` : ''}
+                                ${stats.io_stats.io_throughput_mbps ? `
+                                    <div class="col-md-3 mb-2">
+                                        <small class="text-muted">I/O Throughput (MB/s)</small>
+                                        <div class="h6 mb-0">${stats.io_stats.io_throughput_mbps}</div>
+                                    </div>
+                                ` : ''}
+                                ${stats.io_stats.total_blocks_accessed ? `
+                                    <div class="col-md-3 mb-2">
+                                        <small class="text-muted">Blocks Accessed</small>
+                                        <div class="h6 mb-0">${stats.io_stats.total_blocks_accessed.toLocaleString()}</div>
+                                    </div>
+                                ` : ''}
+                                ${stats.io_stats.io_efficiency ? `
+                                    <div class="col-md-3 mb-2">
+                                        <small class="text-muted">I/O Efficiency (%)</small>
+                                        <div class="h6 mb-0">${stats.io_stats.io_efficiency}%</div>
+                                    </div>
+                                ` : ''}
+                            </div>
+                        </div>
+                    `;
+                    output.appendChild(ioStatsDiv);
+                }
+                
+                // Node Type Statistics
+                if (stats.node_type_stats && stats.node_type_stats.length > 0) {
+                    const nodeStatsDiv = document.createElement('div');
+                    nodeStatsDiv.className = 'stats-card';
+                    nodeStatsDiv.innerHTML = `
+                        <div class="card-header">
+                            <h6 class="mb-0"><i class="fas fa-sitemap me-2"></i>Node Type Statistics</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="table-responsive">
+                                <table class="table table-sm">
+                                    <thead>
+                                        <tr>
+                                            <th>Node Type</th>
+                                            <th>Count</th>
+                                            <th>Total Time (ms)</th>
+                                            <th>Avg Time (ms)</th>
+                                            <th>Cost %</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${stats.node_type_stats.map(node => `
+                                            <tr>
+                                                <td>${node.node_type}</td>
+                                                <td>${node.count}</td>
+                                                <td>${node.total_time_ms}</td>
+                                                <td>${node.avg_time_ms}</td>
+                                                <td>${node.cost_percentage}%</td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    `;
+                    output.appendChild(nodeStatsDiv);
+                }
+                
+                // Table Statistics
+                if (stats.table_stats && stats.table_stats.length > 0) {
+                    const tableStatsDiv = document.createElement('div');
+                    tableStatsDiv.className = 'stats-card';
+                    tableStatsDiv.innerHTML = `
+                        <div class="card-header">
+                            <h6 class="mb-0"><i class="fas fa-table me-2"></i>Table Statistics</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="table-responsive">
+                                <table class="table table-sm">
+                                    <thead>
+                                        <tr>
+                                            <th>Table</th>
+                                            <th>Scans</th>
+                                            <th>Rows Scanned</th>
+                                            <th>Avg Time (ms)</th>
+                                            <th>Scan Efficiency</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${stats.table_stats.map(table => `
+                                            <tr>
+                                                <td>${table.table_name}</td>
+                                                <td>${table.scan_count}</td>
+                                                <td>${table.rows_scanned.toLocaleString()}</td>
+                                                <td>${table.avg_time_per_scan}</td>
+                                                <td>${table.scan_efficiency}%</td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    `;
+                    output.appendChild(tableStatsDiv);
+                }
+            }
+            
+            // Render the D3.js visualization
+            if (data.json_tree) {
+                // Create visualization container
+                const vizContainer = document.createElement('div');
+                vizContainer.className = 'explain-visualization-container';
+                vizContainer.innerHTML = `
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h6 class="mb-0"><i class="fas fa-project-diagram me-2"></i>Execution Plan Visualization</h6>
+                        <div class="btn-group btn-group-sm" role="group">
+                            <button type="button" class="btn btn-outline-secondary" onclick="toggleMetrics()">
+                                <i class="fas fa-chart-bar"></i> Toggle Metrics
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary" onclick="resetZoom()">
+                                <i class="fas fa-search"></i> Reset Zoom
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary" onclick="exportToPNG(this.closest('.explain-visualization-container'))">
+                                <i class="fas fa-download"></i> Export PNG
+                            </button>
+                        </div>
+                    </div>
+                    <div id="d3-visualization" style="width: 100%; height: 600px; border: 1px solid #e5e7eb; border-radius: 8px; background: white;"></div>
+                `;
+                output.appendChild(vizContainer);
+                
+                // Ensure D3.js is loaded and render the visualization
+                ensureD3Loaded(() => {
+                    renderD3Tree(data.json_tree, document.getElementById('d3-visualization'));
+                });
+            }
         } else {
-            output.innerHTML = `<div class="visualization-error"><i class="fas fa-exclamation-triangle me-2"></i>Error: ${data.error}</div>`;
+            output.innerHTML = `<div class="visualization-error"><i class="fas fa-exclamation-triangle me-2"></i>${data.error}</div>`;
         }
     })
     .catch(error => {
@@ -680,8 +826,11 @@ function generateExplainVisualization() {
 }
 
         function renderDetailedTree(treeData, container) {
+            console.log("renderDetailedTree called with:", {treeData, container});
+            
             // Calculate plan complexity to adjust spacing dynamically
             const planComplexity = calculatePlanComplexity(treeData);
+            console.log("Detailed tree plan complexity:", planComplexity);
             
             // Set dimensions with dynamic spacing based on complexity
             const baseMargin = {top: 80, right: 450, bottom: 120, left: 450};
@@ -696,9 +845,12 @@ function generateExplainVisualization() {
     
             const width = Math.max(container.clientWidth - margin.right - margin.left, 1400);
             const height = Math.max(1200 - margin.top - margin.bottom, 800);
+            
+            console.log("Dimensions calculated:", {width, height, margin});
 
             // Clear container
             container.innerHTML = '';
+            console.log("Container cleared");
 
             // Create main visualization container with proper containment
             const vizContainer = d3.select(container).append("div")
@@ -706,9 +858,11 @@ function generateExplainVisualization() {
                 .style("width", "100%")
                 .style("height", "100%")
                 .style("border-radius", "8px")
-                .style("background", "#ffffff")
+                .style("background", "#f0f8ff") // Light blue background to make it visible
                 .style("border", "2px solid #e5e7eb")
                 .style("overflow", "hidden"); // FIX: Add overflow hidden to prevent dragging outside
+            
+            console.log("Viz container created");
 
             // Create SVG with much larger dimensions to accommodate text
             const svg = vizContainer.append("svg")
@@ -717,19 +871,84 @@ function generateExplainVisualization() {
                 .style("overflow", "visible")
                 .append("g")
                 .attr("transform", `translate(${margin.left},${margin.top})`);
+            
+            console.log("SVG created");
 
-            // Add zoom behavior with proper containment - FIX: Add translateExtent to constrain dragging
+            // Add zoom behavior with proper containment - FIXED: Improved dragging constraints
             const zoom = d3.zoom()
-                .scaleExtent([0.3, 4])
-                .translateExtent([[0, 0], [width + margin.right + margin.left, height + margin.top + margin.bottom]]) // FIX: Constrain dragging
+                .scaleExtent([0.05, 10]) // Allow even more zoom range
+                .translateExtent([[-width * 5, -height * 5], [width * 6, height * 6]]) // Much larger dragging area
+                .filter(event => {
+                    // Only allow zoom on mouse wheel or touch gestures, not on simple clicks
+                    return event.type === 'wheel' || event.type === 'touchstart' || event.type === 'touchmove';
+                })
                 .on("zoom", (event) => {
-                    svg.attr("transform", event.transform);
+                    // Apply transform to the content group
+                    contentGroup.attr("transform", `translate(${margin.left},${margin.top}) ${event.transform}`);
                 });
 
             vizContainer.select("svg").call(zoom);
+            
+            // Add controlled drag behavior
+            let isDragging = false;
+            let startX, startY;
+            
+            vizContainer.select("svg")
+                .on("mousedown", function(event) {
+                    if (event.button === 0) { // Left mouse button only
+                        isDragging = true;
+                        startX = event.clientX;
+                        startY = event.clientY;
+                        vizContainer.style("cursor", "grabbing");
+                    }
+                })
+                .on("mousemove", function(event) {
+                    if (isDragging) {
+                        const deltaX = event.clientX - startX;
+                        const deltaY = event.clientY - startY;
+                        
+                        // Get current transform
+                        const currentTransform = contentGroup.attr("transform");
+                        const match = currentTransform.match(/translate\(([^,]+),\s*([^)]+)\)/);
+                        
+                        if (match) {
+                            const currentX = parseFloat(match[1]) + deltaX;
+                            const currentY = parseFloat(match[2]) + deltaY;
+                            
+                            // Apply new transform with constraints
+                            const constrainedX = Math.max(-width * 2, Math.min(width * 2, currentX));
+                            const constrainedY = Math.max(-height * 2, Math.min(height * 2, currentY));
+                            
+                            contentGroup.attr("transform", `translate(${constrainedX},${constrainedY})`);
+                        }
+                        
+                        startX = event.clientX;
+                        startY = event.clientY;
+                    }
+                })
+                .on("mouseup", function() {
+                    isDragging = false;
+                    vizContainer.style("cursor", "grab");
+                })
+                .on("mouseleave", function() {
+                    isDragging = false;
+                    vizContainer.style("cursor", "grab");
+                });
+            
+            // Set initial cursor
+            vizContainer.style("cursor", "grab");
+            
+            // FIXED: Set initial zoom position to center the flowchart properly
+            const containerWidth = container.clientWidth;
+            const containerHeight = container.clientHeight;
+            const initialTransform = d3.zoomIdentity.translate(containerWidth * 0.1, containerHeight * 0.1).scale(0.4);
+            contentGroup.attr("transform", `translate(${margin.left},${margin.top}) ${initialTransform}`);
+            
+            console.log("Zoom behavior added");
 
             // Use the tree data directly from backend (actual execution flow)
             const root = d3.hierarchy(treeData, d => d.children);
+            console.log("Hierarchy created:", root);
             
             // Calculate performance metrics for color coding
             let maxCost = 0;
@@ -745,6 +964,8 @@ function generateExplainVisualization() {
                     maxBufferReads = d.data.buffers.shared_read;
                 }
             });
+            
+            console.log("Performance metrics calculated:", {maxCost, maxTime, maxBufferReads});
             
             // Ensure we have minimum values for color scale calculation
             if (maxCost === 0) maxCost = 1;
@@ -768,16 +989,18 @@ function generateExplainVisualization() {
             const baseSeparation = 3.5;
             const separationMultiplier = Math.max(1, planComplexity / 12);
             
+            // FIXED: Center the tree layout by default by adjusting the tree size and positioning
             const tree = d3.tree().size([width, height]).separation((a, b) => {
                 // Balanced separation between siblings to prevent text overlap while maintaining proximity
                 const separation = baseSeparation * separationMultiplier;
                 return (a.parent === b.parent ? separation : separation * 1.2);
             });
 
-            // Assigns the data to a hierarchy using parent-child relationships
+            // Assigns the data to a hierarchy
             const treeData2 = tree(root);
+            console.log("Tree layout applied:", treeData2);
 
-            // CENTER THE TREE BY DEFAULT
+            // FIXED: Improved centering calculation to ensure topmost element is centered
             const treeBounds = treeData2.descendants().reduce((bounds, d) => {
                 bounds.x0 = Math.min(bounds.x0, d.x);
                 bounds.x1 = Math.max(bounds.x1, d.x);
@@ -786,21 +1009,25 @@ function generateExplainVisualization() {
                 return bounds;
             }, {x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity});
 
-            // Calculate centering transform
+            // Calculate centering transform with better positioning - FIXED: Center the flowchart properly
             const treeWidth = treeBounds.x1 - treeBounds.x0;
             const treeHeight = treeBounds.y1 - treeBounds.y0;
-            const centerX = (width - treeWidth) / 2 - treeBounds.x0;
-            const centerY = (height - treeHeight) / 2 - treeBounds.y0;
+            const centerX = (width * 0.5) - (treeBounds.x0 + treeWidth * 0.5); // Center the tree properly
+            const centerY = Math.max(20, (height - treeHeight) / 2 - treeBounds.y0); // Ensure minimum top margin
 
             // Apply centering transform to all nodes
             treeData2.descendants().forEach(d => {
                 d.x += centerX;
                 d.y += centerY;
             });
+            
+            console.log("Tree bounds and centering applied");
 
             // Compute the new tree layout
             const nodes = treeData2.descendants();
             const links = treeData2.links();
+            
+            console.log("Nodes and links computed:", {nodesCount: nodes.length, linksCount: links.length});
 
             // Declare the links with enhanced styling
             const link = svg.selectAll(".link")
@@ -815,6 +1042,8 @@ function generateExplainVisualization() {
                 .style("stroke-width", 2.5)
                 .style("stroke-opacity", 0.8)
                 .style("z-index", "1");
+            
+            console.log("Links created");
 
             // Declare the nodes
             const node = svg.selectAll(".node")
@@ -823,6 +1052,8 @@ function generateExplainVisualization() {
                 .attr("class", "node")
                 .attr("transform", d => `translate(${d.x},${d.y})`)
                 .style("z-index", "10");
+            
+            console.log("Nodes created");
 
             // FIX: Add function to detect scan operations that might need indexes
             function isScanOperation(operation) {
@@ -939,16 +1170,16 @@ function generateExplainVisualization() {
                 let xOffset = baseOffset;
                 let yOffset = verticalSpacing[textType] || 0;
                 
-                // FIX: IMPROVED side determination for better branch clarity
+                // FIXED: IMPROVED side determination for better branch clarity and text distribution
                 let isLeftSide = false;
                 
-                // For nodes with siblings, place text on opposite sides
+                // For nodes with siblings, place text on opposite sides to prevent overlaps
                 if (d.parent && d.parent.children) {
                     const siblings = d.parent.children;
                     const siblingIndex = siblings.indexOf(d);
                     const totalSiblings = siblings.length;
                     
-                    // FIX: Better logic for branching nodes - use opposite sides consistently
+                    // FIXED: Better logic for branching nodes - use opposite sides consistently
                     if (totalSiblings > 1) {
                         // For even number of siblings: left, right, left, right...
                         // For odd number: left, right, center, left, right...
@@ -975,9 +1206,10 @@ function generateExplainVisualization() {
                     isLeftSide = d.x < width / 2;
                 }
                 
-                // Adjust for depth to create better visual hierarchy
+                // FIXED: Better depth-based positioning to prevent overlaps
                 if (d.depth > 1) {
-                    isLeftSide = !isLeftSide; // Invert for deeper levels
+                    // For deeper levels, alternate sides based on depth to create visual hierarchy
+                    isLeftSide = (d.depth % 2 === 0) ? !isLeftSide : isLeftSide;
                 }
                 
                 if (isLeftSide) {
@@ -992,19 +1224,21 @@ function generateExplainVisualization() {
                 const depthOffset = d.depth * 1.0; // Reduced for tighter grouping
                 yOffset += depthOffset;
                 
-                // Enhanced sibling offset to prevent overlaps
+                // FIXED: Enhanced sibling offset to prevent overlaps
                 if (d.parent && d.parent.children) {
                     const siblingIndex = d.parent.children.indexOf(d);
                     const totalSiblings = d.parent.children.length;
                     if (totalSiblings > 1) {
-                        const siblingOffset = (siblingIndex - (totalSiblings - 1) / 2) * 0.8; // Reduced for closer positioning
+                        const siblingOffset = (siblingIndex - (totalSiblings - 1) / 2) * 1.2; // Increased for better separation
                         yOffset += siblingOffset;
                     }
                 }
                 
-                // Additional offset based on text type to prevent overlap between operation and metrics
+                // FIXED: Better text type offset to prevent overlap between operation and metrics
                 if (textType === 'metrics') {
-                    yOffset += 1.0; // Small additional offset for metrics
+                    yOffset += 1.5; // Increased offset for metrics
+                } else if (textType === 'indicators') {
+                    yOffset += 3.0; // Increased offset for indicators
                 }
                 
                 return {
@@ -1154,37 +1388,37 @@ function generateExplainVisualization() {
                     return tooltip;
                 });
 
-            // Create legend in a separate container outside the main visualization
-            const legendContainer = d3.select(container).append("div")
+            // Create compact legend outside the container
+            const legendContainer = d3.select(container.parentNode).append("div")
                 .style("position", "absolute")
-                .style("bottom", "80px") // Moved to bottom to avoid blocking view
+                .style("top", "20px") // Position at top right of parent container
                 .style("right", "20px")
-                .style("width", "280px")
+                .style("width", "250px")
                 .style("background", "rgba(255, 255, 255, 0.95)")
                 .style("border", "2px solid #e5e7eb")
-                .style("border-radius", "12px")
-                .style("padding", "15px")
-                .style("box-shadow", "0 8px 32px rgba(0, 0, 0, 0.1)")
+                .style("border-radius", "10px")
+                .style("padding", "12px")
+                .style("box-shadow", "0 6px 24px rgba(0, 0, 0, 0.1)")
                 .style("z-index", "100")
                 .style("backdrop-filter", "blur(10px)")
-                .style("max-height", "300px") // Limit height
+                .style("max-height", "250px") // Limit height
                 .style("overflow-y", "auto"); // Make scrollable if needed
 
             // Legend title
             legendContainer.append("div")
-                .style("font-size", "16px")
+                .style("font-size", "14px")
                 .style("font-weight", "bold")
                 .style("color", "#1f2937")
-                .style("margin-bottom", "12px")
+                .style("margin-bottom", "10px")
                 .style("text-align", "center")
                 .text("Performance Legend");
 
             // Performance levels
             legendContainer.append("div")
-                .style("font-size", "14px")
+                .style("font-size", "12px")
                 .style("font-weight", "600")
                 .style("color", "#374151")
-                .style("margin-bottom", "8px")
+                .style("margin-bottom", "6px")
                 .text("Performance Levels:");
 
             const performanceLevels = [
@@ -1197,66 +1431,66 @@ function generateExplainVisualization() {
                 const legendItem = legendContainer.append("div")
                     .style("display", "flex")
                     .style("align-items", "center")
-                    .style("margin-bottom", "6px");
+                    .style("margin-bottom", "4px");
 
                 legendItem.append("div")
-                    .style("width", "16px")
-                    .style("height", "16px")
+                    .style("width", "12px")
+                    .style("height", "12px")
                     .style("border-radius", "50%")
                     .style("background", item.color)
-                    .style("border", "2px solid #ffffff")
-                    .style("margin-right", "10px")
-                    .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)");
+                    .style("border", "1px solid #ffffff")
+                    .style("margin-right", "8px")
+                    .style("box-shadow", "0 1px 3px rgba(0,0,0,0.1)");
 
                 legendItem.append("span")
-                    .style("font-size", "12px")
+                    .style("font-size", "10px")
                     .style("color", "#374151")
                     .text(item.label);
             });
 
             // Add operation type indicators
             legendContainer.append("div")
-                .style("font-size", "14px")
+                .style("font-size", "12px")
                 .style("font-weight", "600")
                 .style("color", "#374151")
-                .style("margin-top", "15px")
-                .style("margin-bottom", "8px")
+                .style("margin-top", "10px")
+                .style("margin-bottom", "6px")
                 .text("Operation Types:");
 
             const operationTypes = [
                 { pattern: "none", label: "CPU Operations" },
-                { pattern: "6,6", label: "I/O Operations" }
+                { pattern: "4,4", label: "I/O Operations" }
             ];
 
             operationTypes.forEach((item, i) => {
                 const legendItem = legendContainer.append("div")
                     .style("display", "flex")
                     .style("align-items", "center")
-                    .style("margin-bottom", "6px");
+                    .style("margin-bottom", "4px");
 
                 legendItem.append("div")
-                    .style("width", "16px")
-                    .style("height", "16px")
+                    .style("width", "12px")
+                    .style("height", "12px")
                     .style("border-radius", "50%")
                     .style("background", "#3b82f6")
-                    .style("border", "2px solid #ffffff")
+                    .style("border", "1px solid #ffffff")
                     .style("border-style", item.pattern === "none" ? "solid" : "dashed")
-                    .style("margin-right", "10px")
-                    .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)");
+                    .style("margin-right", "8px")
+                    .style("box-shadow", "0 1px 3px rgba(0,0,0,0.1)");
 
                 legendItem.append("span")
-                    .style("font-size", "12px")
+                    .style("font-size", "10px")
                     .style("color", "#374151")
                     .text(item.label);
             });
 
             // Add performance indicators section
             legendContainer.append("div")
-                .style("font-size", "14px")
+                .style("font-size", "12px")
                 .style("font-weight", "600")
                 .style("color", "#374151")
-                .style("margin-top", "15px")
-                .style("margin-bottom", "8px")
+                .style("margin-top", "10px")
+                .style("margin-bottom", "6px")
                 .text("Performance Indicators:");
 
             const indicators = [
@@ -1271,29 +1505,56 @@ function generateExplainVisualization() {
                 const legendItem = legendContainer.append("div")
                     .style("display", "flex")
                     .style("align-items", "center")
-                    .style("margin-bottom", "6px");
+                    .style("margin-bottom", "4px");
 
                 legendItem.append("span")
-                    .style("font-size", "12px")
+                    .style("font-size", "10px")
                     .style("color", "#dc2626")
                     .style("font-weight", "bold")
-                    .style("margin-right", "10px")
+                    .style("margin-right", "8px")
                     .text(item.symbol);
 
                 legendItem.append("span")
-                    .style("font-size", "12px")
+                    .style("font-size", "10px")
                     .style("color", "#374151")
                     .text(item.label);
             });
 
             // Add visualization controls
             addVisualizationControls(vizContainer, container);
+            
+            // Add interaction hint
+            const interactionHint = d3.select(container).append("div")
+                .style("position", "absolute")
+                .style("top", "10px")
+                .style("left", "10px")
+                .style("background", "rgba(59, 130, 246, 0.9)")
+                .style("color", "white")
+                .style("padding", "8px 12px")
+                .style("border-radius", "6px")
+                .style("font-size", "12px")
+                .style("font-weight", "500")
+                .style("z-index", "1000")
+                .style("box-shadow", "0 2px 8px rgba(0,0,0,0.2)")
+                .style("pointer-events", "none")
+                .style("opacity", "0.9")
+                .text("🖱️ Drag to move • Scroll to zoom • Click buttons for controls");
+            
+            // Auto-hide interaction hint after 5 seconds
+            setTimeout(() => {
+                interactionHint.style("opacity", "0").transition().duration(500).remove();
+            }, 5000);
+            
+            console.log("renderDetailedTree completed successfully");
         }
 
         // Compact visualization for complex plans (≥16 nodes)
         function renderCompactTree(treeData, container) {
+            console.log("renderCompactTree called with:", {treeData, container});
+            
             // Calculate plan complexity
             const planComplexity = calculatePlanComplexity(treeData);
+            console.log("Compact tree plan complexity:", planComplexity);
             
             // Set dimensions optimized for complex plans
             const baseMargin = {top: 60, right: 300, bottom: 80, left: 300};
@@ -1308,9 +1569,13 @@ function generateExplainVisualization() {
     
             const width = Math.max(container.clientWidth - margin.right - margin.left, 1600);
             const height = Math.max(1400 - margin.top - margin.bottom, 1000);
+            
+            console.log("Compact tree dimensions:", {width, height, margin});
+            console.log("Container dimensions:", {clientWidth: container.clientWidth, clientHeight: container.clientHeight});
 
             // Clear container
             container.innerHTML = '';
+            console.log("Compact tree container cleared");
 
             // Create main visualization container with proper containment
             const vizContainer = d3.select(container).append("div")
@@ -1318,30 +1583,99 @@ function generateExplainVisualization() {
                 .style("width", "100%")
                 .style("height", "100%")
                 .style("border-radius", "8px")
-                .style("background", "#ffffff")
+                .style("background", "#f0f8ff") // Light blue background to make it visible
                 .style("border", "2px solid #e5e7eb")
                 .style("overflow", "hidden"); // FIX: Add overflow hidden to prevent dragging outside
+            
+            console.log("Compact tree viz container created");
 
             // Create SVG with larger dimensions for complex plans
             const svg = vizContainer.append("svg")
                 .attr("width", width + margin.right + margin.left)
                 .attr("height", height + margin.top + margin.bottom)
-                .style("overflow", "visible")
-                .append("g")
+                .style("overflow", "visible");
+            
+            // Create the main content group that will be transformed by zoom
+            const contentGroup = svg.append("g")
                 .attr("transform", `translate(${margin.left},${margin.top})`);
+            
+            console.log("Compact tree SVG created with dimensions:", {
+                width: width + margin.right + margin.left,
+                height: height + margin.top + margin.bottom,
+                margin: margin
+            });
 
-            // Add zoom behavior with proper containment - FIX: Add translateExtent to constrain dragging
+            // Add zoom behavior with proper containment - FIXED: Improved dragging constraints
             const zoom = d3.zoom()
                 .scaleExtent([0.2, 5])
-                .translateExtent([[0, 0], [width + margin.right + margin.left, height + margin.top + margin.bottom]]) // FIX: Constrain dragging
+                .translateExtent([[-width * 0.5, -height * 0.5], [width * 1.5, height * 1.5]]) // FIXED: Allow more dragging space
                 .on("zoom", (event) => {
-                    svg.attr("transform", event.transform);
+                    // Apply transform to the content group
+                    contentGroup.attr("transform", `translate(${margin.left},${margin.top}) ${event.transform}`);
                 });
 
             vizContainer.select("svg").call(zoom);
+            
+            // Add controlled drag behavior
+            let isDragging = false;
+            let startX, startY;
+            
+            vizContainer.select("svg")
+                .on("mousedown", function(event) {
+                    if (event.button === 0) { // Left mouse button only
+                        isDragging = true;
+                        startX = event.clientX;
+                        startY = event.clientY;
+                        vizContainer.style("cursor", "grabbing");
+                    }
+                })
+                .on("mousemove", function(event) {
+                    if (isDragging) {
+                        const deltaX = event.clientX - startX;
+                        const deltaY = event.clientY - startY;
+                        
+                        // Get current transform
+                        const currentTransform = contentGroup.attr("transform");
+                        const match = currentTransform.match(/translate\(([^,]+),\s*([^)]+)\)/);
+                        
+                        if (match) {
+                            const currentX = parseFloat(match[1]) + deltaX;
+                            const currentY = parseFloat(match[2]) + deltaY;
+                            
+                            // Apply new transform with constraints
+                            const constrainedX = Math.max(-width * 2, Math.min(width * 2, currentX));
+                            const constrainedY = Math.max(-height * 2, Math.min(height * 2, currentY));
+                            
+                            contentGroup.attr("transform", `translate(${constrainedX},${constrainedY})`);
+                        }
+                        
+                        startX = event.clientX;
+                        startY = event.clientY;
+                    }
+                })
+                .on("mouseup", function() {
+                    isDragging = false;
+                    vizContainer.style("cursor", "grab");
+                })
+                .on("mouseleave", function() {
+                    isDragging = false;
+                    vizContainer.style("cursor", "grab");
+                });
+            
+            // Set initial cursor
+            vizContainer.style("cursor", "grab");
+            
+            // FIXED: Set initial zoom position to center the flowchart properly
+            const containerWidth = container.clientWidth;
+            const containerHeight = container.clientHeight;
+            const initialTransform = d3.zoomIdentity.translate(containerWidth * 0.1, containerHeight * 0.1).scale(0.4);
+            contentGroup.attr("transform", `translate(${margin.left},${margin.top}) ${initialTransform}`);
+            
+            console.log("Compact tree zoom behavior added");
 
             // Use the tree data directly from backend
             const root = d3.hierarchy(treeData, d => d.children);
+            console.log("Compact tree hierarchy created:", root);
             
             // Calculate performance metrics for color coding
             let maxCost = 0;
@@ -1356,6 +1690,8 @@ function generateExplainVisualization() {
                     maxBufferReads = d.data.buffers.shared_read;
                 }
             });
+            
+            console.log("Compact tree performance metrics:", {maxCost, maxTime, maxBufferReads});
             
             // Ensure we have minimum values for color scale calculation
             if (maxCost === 0) maxCost = 1;
@@ -1402,6 +1738,7 @@ function generateExplainVisualization() {
             const baseSeparation = 2.0;
             const separationMultiplier = Math.max(1, planComplexity / 20);
             
+            // FIXED: Center the tree layout by default by adjusting the tree size and positioning
             const tree = d3.tree().size([width, height]).separation((a, b) => {
                 const separation = baseSeparation * separationMultiplier;
                 return (a.parent === b.parent ? separation : separation * 1.1);
@@ -1410,7 +1747,7 @@ function generateExplainVisualization() {
             // Assigns the data to a hierarchy using parent-child relationships
             const treeData2 = tree(root);
 
-            // CENTER THE TREE BY DEFAULT
+            // FIXED: Improved centering calculation to ensure topmost element is centered
             const treeBounds = treeData2.descendants().reduce((bounds, d) => {
                 bounds.x0 = Math.min(bounds.x0, d.x);
                 bounds.x1 = Math.max(bounds.x1, d.x);
@@ -1419,11 +1756,14 @@ function generateExplainVisualization() {
                 return bounds;
             }, {x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity});
 
-            // Calculate centering transform
+            // Calculate centering transform with better positioning - FIXED: Center the flowchart properly
             const treeWidth = treeBounds.x1 - treeBounds.x0;
             const treeHeight = treeBounds.y1 - treeBounds.y0;
-            const centerX = (width - treeWidth) / 2 - treeBounds.x0;
-            const centerY = (height - treeHeight) / 2 - treeBounds.y0;
+            const centerX = (width * 0.5) - (treeBounds.x0 + treeWidth * 0.5); // Center the tree properly
+            const centerY = Math.max(20, (height - treeHeight) / 2 - treeBounds.y0); // Ensure minimum top margin
+            
+            console.log("Compact tree bounds:", treeBounds);
+            console.log("Compact tree positioning:", {treeWidth, treeHeight, centerX, centerY});
 
             // Apply centering transform to all nodes
             treeData2.descendants().forEach(d => {
@@ -1436,7 +1776,7 @@ function generateExplainVisualization() {
             const links = treeData2.links();
 
             // Declare the links with enhanced styling
-            const link = svg.selectAll(".link")
+            const link = contentGroup.selectAll(".link")
                 .data(links)
                 .enter().append("path")
                 .attr("class", "link")
@@ -1450,12 +1790,17 @@ function generateExplainVisualization() {
                 .style("z-index", "1");
 
             // Declare the nodes
-            const node = svg.selectAll(".node")
+            const node = contentGroup.selectAll(".node")
                 .data(nodes)
                 .enter().append("g")
                 .attr("class", "node")
                 .attr("transform", d => `translate(${d.x},${d.y})`)
                 .style("z-index", "10");
+            
+            console.log("Compact tree nodes created, count:", nodes.length);
+            
+            // Debug: Show first few node positions
+            console.log("First 5 node positions:", nodes.slice(0, 5).map(d => ({x: d.x, y: d.y, operation: d.data.operation})));
 
             // Add the circles for the nodes with compact sizing
             node.append("circle")
@@ -1528,11 +1873,13 @@ function generateExplainVisualization() {
                         return "drop-shadow(0 0 4px rgba(245, 158, 11, 0.4))"; // Orange glow for scans
                     }
                     if (performanceHotspots.includes(d.data.cost)) {
-                        return "drop-shadow(0 3px 6px rgba(0,0,0,0.3))";
+                        return "drop-shadow(0 3px 6px rgba(0,0,0,0.2))";
                     }
                     return "drop-shadow(0 1px 3px rgba(0,0,0,0.1))";
                 })
                 .style("z-index", "5");
+            
+            console.log("Compact tree circles added");
 
                     // FIX: IMPROVED compact text positioning function with better branch handling
         function calculateCompactTextPosition(d, textType) {
@@ -1777,9 +2124,9 @@ function generateExplainVisualization() {
                 });
 
             // Create compact legend
-            const legendContainer = d3.select(container).append("div")
+            const legendContainer = d3.select(container.parentNode).append("div")
                 .style("position", "absolute")
-                .style("bottom", "80px") // Moved to bottom to avoid blocking view
+                .style("top", "20px") // Position at top right of parent container
                 .style("right", "20px")
                 .style("width", "250px")
                 .style("background", "rgba(255, 255, 255, 0.95)")
@@ -1910,6 +2257,20 @@ function generateExplainVisualization() {
 
             // Add visualization controls
             addVisualizationControls(vizContainer, container);
+            
+            // Add keyboard shortcut for reset view
+            const handleKeyPress = (event) => {
+                if (event.key === 'r' || event.key === 'R') {
+                    event.preventDefault();
+                    resetZoom();
+                }
+            };
+            document.addEventListener('keydown', handleKeyPress);
+            
+            // Store the event listener for cleanup
+            container._keyPressHandler = handleKeyPress;
+            
+            console.log("renderCompactTree completed successfully");
         }
 
         // Helper function to add visualization controls
@@ -1941,11 +2302,7 @@ function generateExplainVisualization() {
                 .on("click", function(event) {
                     event.preventDefault();
                     event.stopPropagation();
-                    const svg = vizContainer.select("svg");
-                    const zoom = d3.zoom().on("zoom", (event) => {
-                        svg.select("g").attr("transform", event.transform);
-                    });
-                    svg.call(zoom.transform, d3.zoomIdentity);
+                    resetZoom();
                 });
 
             // Zoom In button
@@ -2014,6 +2371,24 @@ function generateExplainVisualization() {
                     event.preventDefault();
                     event.stopPropagation();
                     exportToSVG(vizContainer);
+                });
+
+            // Reset View button
+            controlsContainer.append("button")
+                .attr("type", "button")
+                .attr("class", "btn btn-outline-secondary btn-sm")
+                .style("font-size", "11px")
+                .style("padding", "4px 8px")
+                .style("border-radius", "6px")
+                .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)")
+                .text("Reset View")
+                .on("click", function(event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const svg = vizContainer.select("svg");
+                    const contentGroup = svg.select("g");
+                    const margin = {left: 300, top: 60};
+                    contentGroup.attr("transform", `translate(${margin.left},${margin.top})`);
                 });
         }
 
@@ -2831,17 +3206,97 @@ function loadSampleData() {
 }
 
         function renderD3Tree(treeData, container) {
+            console.log("renderD3Tree called with:", {treeData, container});
+            
             // Calculate plan complexity to determine visualization type
             const planComplexity = calculatePlanComplexity(treeData);
+            console.log("Plan complexity:", planComplexity);
             
             // Use compact mode for very complex plans (≥20 nodes) - increased threshold
             if (planComplexity >= 20) {
+                console.log("Using compact tree rendering");
                 renderCompactTree(treeData, container);
                 return;
             }
             
             // Use detailed mode for simple and moderately complex plans (≤19 nodes)
+            console.log("Using detailed tree rendering");
             renderDetailedTree(treeData, container);
         }
 
-        // Detailed visualization for simple plans (≤15 nodes)
+        // Global functions for visualization controls
+        function resetZoom() {
+            const container = document.getElementById('d3-visualization');
+            if (container) {
+                const svg = d3.select(container).select("svg");
+                if (svg.empty()) return;
+                
+                const contentGroup = svg.select("g");
+                if (contentGroup.empty()) return;
+                
+                const zoom = d3.zoom().on("zoom", (event) => {
+                    const margin = {left: 300, top: 60}; // Default margins
+                    contentGroup.attr("transform", `translate(${margin.left},${margin.top}) ${event.transform}`);
+                });
+                
+                // Calculate proper fit to screen
+                const containerWidth = container.clientWidth;
+                const containerHeight = container.clientHeight;
+                
+                // Get the actual content bounds
+                const nodes = contentGroup.selectAll(".node");
+                if (nodes.empty()) return;
+                
+                let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+                nodes.each(function() {
+                    const transform = d3.select(this).attr("transform");
+                    if (transform) {
+                        const match = transform.match(/translate\(([^,]+),\s*([^)]+)\)/);
+                        if (match) {
+                            const x = parseFloat(match[1]);
+                            const y = parseFloat(match[2]);
+                            minX = Math.min(minX, x);
+                            maxX = Math.max(maxX, x);
+                            minY = Math.min(minY, y);
+                            maxY = Math.max(maxY, y);
+                        }
+                    }
+                });
+                
+                // If we couldn't get bounds from transforms, use a default approach
+                if (minX === Infinity) {
+                    // Fallback to container-based centering
+                    const margin = {left: 300, top: 60};
+                    const transform = d3.zoomIdentity.translate(containerWidth * 0.5, containerHeight * 0.5).scale(0.6);
+                    contentGroup.attr("transform", `translate(${margin.left},${margin.top}) ${transform}`);
+                    return;
+                }
+                
+                // Calculate content dimensions
+                const contentWidth = maxX - minX;
+                const contentHeight = maxY - minY;
+                
+                // Calculate scale to fit
+                const scaleX = containerWidth / contentWidth;
+                const scaleY = containerHeight / contentHeight;
+                const scale = Math.min(scaleX, scaleY, 1) * 0.8; // 80% of fit scale
+                
+                // Calculate center position
+                const centerX = (containerWidth - contentWidth * scale) / 2;
+                const centerY = (containerHeight - contentHeight * scale) / 2;
+                
+                const margin = {left: 300, top: 60};
+                const transform = d3.zoomIdentity.translate(centerX, centerY).scale(scale);
+                contentGroup.attr("transform", `translate(${margin.left},${margin.top}) ${transform}`);
+            }
+        }
+
+        function toggleMetrics() {
+            const container = document.getElementById('d3-visualization');
+            if (container) {
+                const metricsElements = container.querySelectorAll('.metrics, .performance-indicators');
+                metricsElements.forEach(el => {
+                    el.style.display = el.style.display === 'none' ? 'block' : 'none';
+                });
+            }
+        }

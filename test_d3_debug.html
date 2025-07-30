@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>D3.js Oracle Visualization Debug</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #f8fafc;
+        }
+        
+        .test-container {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            border: 2px solid #cbd5e1;
+        }
+        
+        .node circle {
+            stroke: #fff;
+            stroke-width: 3px;
+        }
+        
+        .node text {
+            font: 12px sans-serif;
+        }
+        
+        .link {
+            fill: none;
+            stroke: #555;
+            stroke-opacity: 0.4;
+            stroke-width: 1.5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-container">
+        <h2>Oracle EXPLAIN Plan Visualization Debug</h2>
+        <div id="visualization" style="width: 100%; height: 600px; border: 1px solid #e5e7eb; border-radius: 8px; background: white;"></div>
+        <div id="debug-info" style="margin-top: 20px; padding: 10px; background: #f3f4f6; border-radius: 8px;">
+            <h4>Debug Information:</h4>
+            <div id="debug-output"></div>
+        </div>
+    </div>
+
+    <script>
+        // Sample Oracle tree data (simplified version of what the backend should return)
+        const sampleOracleTree = {
+            "operation": "Oracle Query Execution Plan",
+            "cost": 0,
+            "rows": 0,
+            "time": 0,
+            "buffers": {},
+            "children": [
+                {
+                    "operation": "SELECT STATEMENT",
+                    "cost": 3632,
+                    "rows": 0,
+                    "time": 0,
+                    "buffers": {},
+                    "children": [
+                        {
+                            "operation": "TEMP TABLE TRANSFORMATION",
+                            "cost": 0,
+                            "rows": 0,
+                            "time": 0,
+                            "buffers": {},
+                            "children": [
+                                {
+                                    "operation": "LOAD AS SELECT (CURSOR DURATION MEMORY) on SYS_TEMP_0FD9D6619_9525CAE4",
+                                    "cost": 0,
+                                    "rows": 0,
+                                    "time": 0,
+                                    "buffers": {},
+                                    "children": [
+                                        {
+                                            "operation": "TABLE ACCESS BY INDEX ROWID on W_CUG_COURSE_SEARCH_TEXT_LIVE1",
+                                            "cost": 8476,
+                                            "rows": 3071,
+                                            "time": 0,
+                                            "buffers": {},
+                                            "children": [
+                                                {
+                                                    "operation": "DOMAIN INDEX on W_CUG_CRS_TXT_LIVE1_IDX",
+                                                    "cost": 8476,
+                                                    "rows": 3586,
+                                                    "time": 0,
+                                                    "buffers": {},
+                                                    "children": []
+                                                }
+                                            ]
+                                        }
+                                    ]
+                                },
+                                {
+                                    "operation": "LOAD AS SELECT (CURSOR DURATION MEMORY) on SYS_TEMP_0FD9D661A_9525CAE4",
+                                    "cost": 0,
+                                    "rows": 0,
+                                    "time": 0,
+                                    "buffers": {},
+                                    "children": [
+                                        {
+                                            "operation": "TABLE ACCESS FULL on W_CUG_AJAX_SUBJECTS",
+                                            "cost": 8,
+                                            "rows": 766,
+                                            "time": 0,
+                                            "buffers": {},
+                                            "children": []
+                                        }
+                                    ]
+                                }
+                            ]
+                        },
+                        {
+                            "operation": "SORT ORDER BY",
+                            "cost": 3632,
+                            "rows": 4804,
+                            "time": 0,
+                            "buffers": {},
+                            "children": [
+                                {
+                                    "operation": "HASH UNIQUE",
+                                    "cost": 2400,
+                                    "rows": 4804,
+                                    "time": 0,
+                                    "buffers": {},
+                                    "children": [
+                                        {
+                                            "operation": "NESTED LOOPS",
+                                            "cost": 1168,
+                                            "rows": 4804,
+                                            "time": 0,
+                                            "buffers": {},
+                                            "children": [
+                                                {
+                                                    "operation": "VIEW",
+                                                    "cost": 554,
+                                                    "rows": 6257,
+                                                    "time": 0,
+                                                    "buffers": {},
+                                                    "children": []
+                                                }
+                                            ]
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        };
+
+        function debugVisualization(treeData, container) {
+            console.log("Starting D3.js visualization debug...");
+            console.log("Tree data:", treeData);
+            console.log("Container:", container);
+            
+            // Clear container
+            container.innerHTML = '';
+            
+            // Set dimensions
+            const margin = {top: 20, right: 90, bottom: 30, left: 90};
+            const width = 960 - margin.right - margin.left;
+            const height = 500 - margin.top - margin.bottom;
+            
+            console.log("Dimensions set:", {width, height, margin});
+            
+            // Create SVG
+            const svg = d3.select(container).append("svg")
+                .attr("width", width + margin.right + margin.left)
+                .attr("height", height + margin.top + margin.bottom)
+                .append("g")
+                .attr("transform", `translate(${margin.left},${margin.top})`);
+            
+            console.log("SVG created");
+            
+            // Create hierarchy
+            const root = d3.hierarchy(treeData, d => d.children);
+            console.log("Hierarchy created:", root);
+            
+            // Calculate performance metrics
+            let maxCost = 0;
+            root.each(d => {
+                if (d.data.cost > maxCost) maxCost = d.data.cost;
+            });
+            console.log("Max cost calculated:", maxCost);
+            
+            // Color scale
+            const colorScale = d3.scaleLinear()
+                .domain([0, maxCost])
+                .range(["#10b981", "#f59e0b", "#ef4444"]);
+            
+            // Tree layout
+            const tree = d3.tree().size([height, width]);
+            const treeData2 = tree(root);
+            console.log("Tree layout applied:", treeData2);
+            
+            // Get nodes and links
+            const nodes = treeData2.descendants();
+            const links = treeData2.links();
+            console.log("Nodes count:", nodes.length);
+            console.log("Links count:", links.length);
+            
+            // Create links
+            const link = svg.selectAll(".link")
+                .data(links)
+                .enter().append("path")
+                .attr("class", "link")
+                .attr("d", d3.linkHorizontal()
+                    .x(d => d.y)
+                    .y(d => d.x));
+            
+            console.log("Links created");
+            
+            // Create nodes
+            const node = svg.selectAll(".node")
+                .data(nodes)
+                .enter().append("g")
+                .attr("class", "node")
+                .attr("transform", d => `translate(${d.y},${d.x})`);
+            
+            console.log("Nodes created");
+            
+            // Add circles to nodes
+            node.append("circle")
+                .attr("r", 10)
+                .style("fill", d => colorScale(d.data.cost))
+                .style("stroke", "#fff")
+                .style("stroke-width", "3px");
+            
+            console.log("Circles added to nodes");
+            
+            // Add labels
+            node.append("text")
+                .attr("dy", ".31em")
+                .attr("x", d => d.children ? -13 : 13)
+                .style("text-anchor", d => d.children ? "end" : "start")
+                .text(d => d.data.operation.substring(0, 20) + (d.data.operation.length > 20 ? "..." : ""));
+            
+            console.log("Labels added");
+            
+            // Update debug output
+            document.getElementById('debug-output').innerHTML = `
+                <p><strong>Tree Data:</strong> ${JSON.stringify(treeData, null, 2).substring(0, 500)}...</p>
+                <p><strong>Nodes:</strong> ${nodes.length}</p>
+                <p><strong>Links:</strong> ${links.length}</p>
+                <p><strong>Max Cost:</strong> ${maxCost}</p>
+                <p><strong>Container Size:</strong> ${container.clientWidth} x ${container.clientHeight}</p>
+            `;
+            
+            console.log("Visualization debug completed");
+        }
+        
+        // Test the visualization
+        window.onload = function() {
+            console.log("Page loaded, starting test...");
+            const container = document.getElementById('visualization');
+            debugVisualization(sampleOracleTree, container);
+        };
+    </script>
+</body>
+</html>
