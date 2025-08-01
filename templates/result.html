@@ -167,6 +167,10 @@
     </style>
 </head>
 <body>
+{% if explain_plan %}
+  <textarea id="explain_plan_data" style="display:none;">{{ explain_plan }}</textarea>
+  <input type="hidden" id="db_engine_data" value="{{ db_engine or 'postgresql' }}">
+{% endif %}
 <div class="container mt-5">
     {% if report and report.engine_mismatch %}
     <div class="d-flex justify-content-center align-items-center" style="min-height: 40vh;">
@@ -657,19 +661,70 @@
         </div>
         {% endif %}
         {% if report and report.explain_mermaid %}
-        <div class="card mb-3">
-            <div class="section-header">EXPLAIN Plan Visualization</div>
-            <div class="card-body">
-                <div id="explain_visualization_output"></div>
-            </div>
+<!-- Performance Legend - Moved to top to avoid blocking visualization -->
+<div class="card mb-3" id="explain-legend-card">
+  <div class="card-header"><i class="fas fa-info-circle me-2"></i>Performance Legend</div>
+  <div class="card-body">
+    <div class="row">
+      <div class="col-md-4">
+        <div class="mb-2"><strong>Performance Levels:</strong></div>
+        <div class="mb-2">
+          <div class="mb-1"><span style="display:inline-block;width:12px;height:12px;background:#10b981;border-radius:50%;margin-right:6px;"></span>Low Cost/Time</div>
+          <div class="mb-1"><span style="display:inline-block;width:12px;height:12px;background:#f59e0b;border-radius:50%;margin-right:6px;"></span>Medium Cost/Time</div>
+          <div class="mb-1"><span style="display:inline-block;width:12px;height:12px;background:#ef4444;border-radius:50%;margin-right:6px;"></span>High Cost/Time</div>
         </div>
-        {% endif %}
+      </div>
+      <div class="col-md-4">
+        <div class="mb-2"><strong>Operation Types:</strong></div>
+        <div class="mb-2">
+          <div class="mb-1"><span style="display:inline-block;width:12px;height:12px;background:#3b82f6;border-radius:50%;margin-right:6px;border:1px solid #fff;"></span>CPU Operations</div>
+          <div class="mb-1"><span style="display:inline-block;width:12px;height:12px;background:#3b82f6;border-radius:50%;margin-right:6px;border:1px dashed #fff;"></span>I/O Operations</div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="mb-2"><strong>Performance Indicators:</strong></div>
+        <div>
+          <div class="mb-1"><span style="font-size:1em;">🔥</span> Performance Hotspot</div>
+          <div class="mb-1"><span style="font-size:1em;">💾</span> I/O Heavy Operation</div>
+          <div class="mb-1"><span style="font-size:1em;">⏱️</span> Slow Operation</div>
+          <div class="mb-1"><span style="font-size:1em;">📋</span> Full Table Scan</div>
+          <div class="mb-1"><span style="font-size:1em;">🔍</span> Scan Operation</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- EXPLAIN Plan Visualization Section -->
+<div class="card mb-3">
+  <div class="section-header">EXPLAIN Plan Visualization</div>
+  <div class="card-body">
+    <!-- Visualization Output Container -->
+    <div id="explain_visualization_container" class="mt-3">
+      <div class="card">
+        <div class="card-header bg-light text-dark">
+          <h6 class="mb-0"><i class="fas fa-chart-line me-2"></i>Execution Plan Visualization</h6>
+        </div>
+        <div class="card-body">
+          <div id="explain_visualization_output" class="text-center">
+            <!-- D3.js visualization will be rendered here -->
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Static Visualization Output (if available from backend) -->
+    <div id="static_explain_visualization_output"></div>
+  </div>
+</div>
+{% endif %}
     {% else %}
         <div class="alert alert-warning">No analysis report available yet.</div>
     {% endif %}
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.0/dist/mermaid.min.js"></script>
+    <script src="{{ url_for('static', filename='scripts.js') }}"></script>
     <script>
         if(window.mermaid){
             mermaid.initialize({
@@ -682,6 +737,49 @@
                 }
             });
         }
+        
+        // Auto-generate visualization on results page load
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('DOMContentLoaded triggered on results page');
+            
+            // Prefer backend-provided data if available
+            const explainPlanElem = document.getElementById('explain_plan_data');
+            const dbEngineElem = document.getElementById('db_engine_data');
+            let explainPlanData = explainPlanElem ? explainPlanElem.value : null;
+            let dbEngine = dbEngineElem ? dbEngineElem.value : null;
+            
+            console.log('Backend data check:', {
+                explainPlanElem: !!explainPlanElem,
+                dbEngineElem: !!dbEngineElem,
+                explainPlanData: explainPlanData ? explainPlanData.substring(0, 100) + '...' : null,
+                dbEngine: dbEngine
+            });
+            
+            // Fallback to sessionStorage if not present
+            if (!explainPlanData) {
+                explainPlanData = sessionStorage.getItem('explain_plan_text');
+                console.log('Using sessionStorage explainPlanData:', explainPlanData ? explainPlanData.substring(0, 100) + '...' : null);
+            }
+            if (!dbEngine) {
+                dbEngine = sessionStorage.getItem('db_engine');
+                console.log('Using sessionStorage dbEngine:', dbEngine);
+            }
+            
+            if (explainPlanData && dbEngine) {
+                console.log('Setting global variables and calling generateExplainVisualization');
+                window._explainPlanData = explainPlanData;
+                window._dbEngine = dbEngine;
+                setTimeout(() => {
+                    console.log('Calling generateExplainVisualization after timeout');
+                    generateExplainVisualization();
+                }, 500);
+            } else {
+                console.log('No explain plan data or db engine found:', {
+                    explainPlanData: !!explainPlanData,
+                    dbEngine: !!dbEngine
+                });
+            }
+        });
     </script>
     
     <style>

@@ -595,26 +595,66 @@ function ensureD3Loaded(callback) {
 }
 
 function generateExplainVisualization() {
-    const explainText = document.getElementById('explain_plan_textarea').value.trim();
-    const dbEngine = document.getElementById('db_engine_select').value;
+    console.log('generateExplainVisualization called');
     
-    if (!explainText) {
-        alert('Please provide an EXPLAIN plan first. You can upload a CSV file or paste the EXPLAIN output text.');
-        return;
+    // Check if we're on the results page or input page
+    const isResultsPage = window.location.pathname.includes('/result') || document.getElementById('static_explain_visualization_output');
+    console.log('isResultsPage:', isResultsPage);
+    
+    let explainText, dbEngine;
+    
+    if (isResultsPage) {
+        // On results page - use backend-provided data if available
+        if (window._explainPlanData && window._dbEngine) {
+            explainText = window._explainPlanData;
+            dbEngine = window._dbEngine;
+            console.log('Using window._explainPlanData and window._dbEngine');
+        } else {
+            // Fallback to sessionStorage
+            explainText = sessionStorage.getItem('explain_plan_text') || '';
+            dbEngine = sessionStorage.getItem('db_engine') || 'postgresql';
+            console.log('Using sessionStorage data');
+        }
+        console.log('Results page data:', {
+            explainText: explainText ? explainText.substring(0, 100) + '...' : null,
+            dbEngine: dbEngine
+        });
+        if (!explainText) {
+            console.log('No EXPLAIN plan data available for automatic visualization');
+            return;
+        }
+    } else {
+        // On input page - get from form elements
+        explainText = document.getElementById('explain_plan_textarea').value.trim();
+        dbEngine = document.getElementById('db_engine_select').value;
+        console.log('Input page data:', {
+            explainText: explainText ? explainText.substring(0, 100) + '...' : null,
+            dbEngine: dbEngine
+        });
+        if (!explainText) {
+            alert('Please provide an EXPLAIN plan first. You can upload a CSV file or paste the EXPLAIN output text.');
+            return;
+        }
     }
     
     // Show loading state
     const container = document.getElementById('explain_visualization_container');
     const output = document.getElementById('explain_visualization_output');
-    container.style.display = 'block';
-    output.innerHTML = '<div class="visualization-loading"><div class="spinner"></div><p>Generating visualization...</p></div>';
+    
+    if (container) {
+        container.style.display = 'block';
+    }
+    
+    if (output) {
+        output.innerHTML = '<div class="visualization-loading"><div class="spinner"></div><p>Generating visualization...</p></div>';
+    }
     
     // Send to backend for processing
     fetch('/generate_explain_visualization', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'X-CSRFToken': document.querySelector('input[name="csrf_token"]').value
+            'X-CSRFToken': document.querySelector('input[name="csrf_token"]')?.value || ''
         },
         body: JSON.stringify({
             explain_plan: explainText,
@@ -625,14 +665,16 @@ function generateExplainVisualization() {
     .then(data => {
         if (data.success) {
             // Clear output
-            output.innerHTML = '';
+            if (output) {
+                output.innerHTML = '';
+            }
             
             // Display format detection info
             if (data.detected_format) {
                 const formatInfo = document.createElement('div');
                 formatInfo.className = 'format-info';
                 formatInfo.innerHTML = `<i class="fas fa-info-circle me-2"></i><strong>Format Detected:</strong> ${data.detected_format.toUpperCase()}`;
-                output.appendChild(formatInfo);
+                if (output) output.appendChild(formatInfo);
             }
             
             // Display optimization recommendations if available
@@ -649,7 +691,7 @@ function generateExplainVisualization() {
                         </ul>
                     </div>
                 `;
-                output.appendChild(recommendationsDiv);
+                if (output) output.appendChild(recommendationsDiv);
             }
             
             // Display warnings if any
@@ -662,7 +704,7 @@ function generateExplainVisualization() {
                         ${data.plan_warnings.map(warning => `<li>${warning}</li>`).join('')}
                     </ul>
                 `;
-                output.appendChild(warningsDiv);
+                if (output) output.appendChild(warningsDiv);
             }
             
             // Display comprehensive statistics if available (similar to explain.depesz.com)
@@ -706,7 +748,7 @@ function generateExplainVisualization() {
                             </div>
                         </div>
                     `;
-                    output.appendChild(ioStatsDiv);
+                    if (output) output.appendChild(ioStatsDiv);
                 }
                 
                 // Node Type Statistics
@@ -744,7 +786,7 @@ function generateExplainVisualization() {
                             </div>
                         </div>
                     `;
-                    output.appendChild(nodeStatsDiv);
+                    if (output) output.appendChild(nodeStatsDiv);
                 }
                 
                 // Table Statistics
@@ -782,7 +824,7 @@ function generateExplainVisualization() {
                             </div>
                         </div>
                     `;
-                    output.appendChild(tableStatsDiv);
+                    if (output) output.appendChild(tableStatsDiv);
                 }
             }
             
@@ -808,7 +850,7 @@ function generateExplainVisualization() {
                     </div>
                     <div id="d3-visualization" style="width: 100%; height: 600px; border: 1px solid #e5e7eb; border-radius: 8px; background: white;"></div>
                 `;
-                output.appendChild(vizContainer);
+                if (output) output.appendChild(vizContainer);
                 
                 // Ensure D3.js is loaded and render the visualization
                 ensureD3Loaded(() => {
@@ -816,12 +858,17 @@ function generateExplainVisualization() {
                 });
             }
         } else {
-            output.innerHTML = `<div class="visualization-error"><i class="fas fa-exclamation-triangle me-2"></i>${data.error}</div>`;
+            console.error('Error generating visualization:', data.error);
+            if (output) {
+                output.innerHTML = `<div class="visualization-error"><i class="fas fa-exclamation-triangle me-2"></i>${data.error}</div>`;
+            }
         }
     })
     .catch(error => {
         console.error('Error:', error);
-        output.innerHTML = `<div class="visualization-error"><i class="fas fa-exclamation-triangle me-2"></i>Error generating visualization. Please try again.</div>`;
+        if (output) {
+            output.innerHTML = `<div class="visualization-error"><i class="fas fa-exclamation-triangle me-2"></i>Error generating visualization. Please try again.</div>`;
+        }
     });
 }
 
@@ -868,81 +915,32 @@ function generateExplainVisualization() {
             const svg = vizContainer.append("svg")
                 .attr("width", width + margin.right + margin.left)
                 .attr("height", height + margin.top + margin.bottom)
-                .style("overflow", "visible")
-                .append("g")
+                .style("overflow", "visible");
+            
+            // Create the main content group that will be transformed by zoom
+            const contentGroup = svg.append("g")
                 .attr("transform", `translate(${margin.left},${margin.top})`);
             
-            console.log("SVG created");
+            console.log("SVG and content group created");
 
-            // Add zoom behavior with proper containment - FIXED: Improved dragging constraints
+            // FIXED: Improved zoom implementation with better centering and drag behavior
             const zoom = d3.zoom()
-                .scaleExtent([0.05, 10]) // Allow even more zoom range
-                .translateExtent([[-width * 5, -height * 5], [width * 6, height * 6]]) // Much larger dragging area
-                .filter(event => {
-                    // Only allow zoom on mouse wheel or touch gestures, not on simple clicks
-                    return event.type === 'wheel' || event.type === 'touchstart' || event.type === 'touchmove';
-                })
+                .scaleExtent([0.2, 4]) // Increased max zoom for better visibility
+                .translateExtent([[-width * 3, -height * 3], [width * 4, height * 4]]) // Much larger drag area
                 .on("zoom", (event) => {
-                    // Apply transform to the content group
-                    contentGroup.attr("transform", `translate(${margin.left},${margin.top}) ${event.transform}`);
+                    // Apply transform with proper margins and better centering
+                    const transform = event.transform;
+                    contentGroup.attr("transform", `translate(${margin.left},${margin.top}) scale(${transform.k}) translate(${transform.x},${transform.y})`);
                 });
 
-            vizContainer.select("svg").call(zoom);
+            // Apply zoom to the SVG
+            svg.call(zoom);
             
-            // Add controlled drag behavior
-            let isDragging = false;
-            let startX, startY;
+            // Store zoom reference for reset function
+            svg.attr("data-zoom", zoom);
             
-            vizContainer.select("svg")
-                .on("mousedown", function(event) {
-                    if (event.button === 0) { // Left mouse button only
-                        isDragging = true;
-                        startX = event.clientX;
-                        startY = event.clientY;
-                        vizContainer.style("cursor", "grabbing");
-                    }
-                })
-                .on("mousemove", function(event) {
-                    if (isDragging) {
-                        const deltaX = event.clientX - startX;
-                        const deltaY = event.clientY - startY;
-                        
-                        // Get current transform
-                        const currentTransform = contentGroup.attr("transform");
-                        const match = currentTransform.match(/translate\(([^,]+),\s*([^)]+)\)/);
-                        
-                        if (match) {
-                            const currentX = parseFloat(match[1]) + deltaX;
-                            const currentY = parseFloat(match[2]) + deltaY;
-                            
-                            // Apply new transform with constraints
-                            const constrainedX = Math.max(-width * 2, Math.min(width * 2, currentX));
-                            const constrainedY = Math.max(-height * 2, Math.min(height * 2, currentY));
-                            
-                            contentGroup.attr("transform", `translate(${constrainedX},${constrainedY})`);
-                        }
-                        
-                        startX = event.clientX;
-                        startY = event.clientY;
-                    }
-                })
-                .on("mouseup", function() {
-                    isDragging = false;
-                    vizContainer.style("cursor", "grab");
-                })
-                .on("mouseleave", function() {
-                    isDragging = false;
-                    vizContainer.style("cursor", "grab");
-                });
-            
-            // Set initial cursor
+            // Set initial cursor for better UX
             vizContainer.style("cursor", "grab");
-            
-            // FIXED: Set initial zoom position to center the flowchart properly
-            const containerWidth = container.clientWidth;
-            const containerHeight = container.clientHeight;
-            const initialTransform = d3.zoomIdentity.translate(containerWidth * 0.1, containerHeight * 0.1).scale(0.4);
-            contentGroup.attr("transform", `translate(${margin.left},${margin.top}) ${initialTransform}`);
             
             console.log("Zoom behavior added");
 
@@ -985,22 +983,22 @@ function generateExplainVisualization() {
                 .domain([0, colorDomain])
                 .range(["#10b981", "#f59e0b", "#ef4444"]); // Green -> Orange -> Red
 
-            // Dynamic separation based on plan complexity
-            const baseSeparation = 3.5;
-            const separationMultiplier = Math.max(1, planComplexity / 12);
+            // IMPROVED: Increased separation and better spacing for complex plans
+            const baseSeparation = 5.0; // Increased from 3.5
+            const separationMultiplier = Math.max(1.2, planComplexity / 10); // Increased multiplier
             
-            // FIXED: Center the tree layout by default by adjusting the tree size and positioning
+            // IMPROVED: Better tree layout with increased spacing
             const tree = d3.tree().size([width, height]).separation((a, b) => {
-                // Balanced separation between siblings to prevent text overlap while maintaining proximity
+                // Increased separation to prevent overlaps
                 const separation = baseSeparation * separationMultiplier;
-                return (a.parent === b.parent ? separation : separation * 1.2);
+                return (a.parent === b.parent ? separation : separation * 1.5);
             });
 
             // Assigns the data to a hierarchy
             const treeData2 = tree(root);
             console.log("Tree layout applied:", treeData2);
 
-            // FIXED: Improved centering calculation to ensure topmost element is centered
+            // FIXED: Better centering calculation for all plan sizes
             const treeBounds = treeData2.descendants().reduce((bounds, d) => {
                 bounds.x0 = Math.min(bounds.x0, d.x);
                 bounds.x1 = Math.max(bounds.x1, d.x);
@@ -1009,16 +1007,25 @@ function generateExplainVisualization() {
                 return bounds;
             }, {x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity});
 
-            // Calculate centering transform with better positioning - FIXED: Center the flowchart properly
+            // FIXED: Better centering with proper scaling and positioning
             const treeWidth = treeBounds.x1 - treeBounds.x0;
             const treeHeight = treeBounds.y1 - treeBounds.y0;
-            const centerX = (width * 0.5) - (treeBounds.x0 + treeWidth * 0.5); // Center the tree properly
-            const centerY = Math.max(20, (height - treeHeight) / 2 - treeBounds.y0); // Ensure minimum top margin
+            
+            // Calculate scale to fit the tree in the container with margins
+            const availableWidth = width - margin.left - margin.right;
+            const availableHeight = height - margin.top - margin.bottom;
+            const scaleX = availableWidth / Math.max(treeWidth, 1);
+            const scaleY = availableHeight / Math.max(treeHeight, 1);
+            const scale = Math.min(scaleX, scaleY, 0.9); // Increased scale for better visibility
+            
+            // FIXED: Better centering calculation to prevent right-side orientation
+            const centerX = (width - treeWidth * scale) / 2;
+            const centerY = (height - treeHeight * scale) / 2;
 
-            // Apply centering transform to all nodes
+            // Apply scaling and centering transform to all nodes
             treeData2.descendants().forEach(d => {
-                d.x += centerX;
-                d.y += centerY;
+                d.x = (d.x - treeBounds.x0) * scale + centerX;
+                d.y = (d.y - treeBounds.y0) * scale + centerY;
             });
             
             console.log("Tree bounds and centering applied");
@@ -1158,19 +1165,19 @@ function generateExplainVisualization() {
                 })
                 .style("z-index", "5");
 
-            // IMPROVED function to calculate optimal text position with better branch handling
+            // FIXED: Advanced text positioning with collision detection and aggressive spacing
             function calculateTextPosition(d, textType) {
-                const baseOffset = 60 * complexityMultiplier; // Reduced for better association
+                const baseOffset = 150 * complexityMultiplier; // Much larger base offset
                 const verticalSpacing = {
                     'operation': 0,
-                    'metrics': 2.0 * complexityMultiplier, // Reduced spacing
-                    'indicators': 4.0 * complexityMultiplier // Reduced spacing
+                    'metrics': 8.0 * complexityMultiplier, // Much larger spacing
+                    'indicators': 10.0 * complexityMultiplier // Much larger spacing
                 };
                 
                 let xOffset = baseOffset;
                 let yOffset = verticalSpacing[textType] || 0;
                 
-                // FIXED: IMPROVED side determination for better branch clarity and text distribution
+                // FIXED: Advanced side determination with better distribution
                 let isLeftSide = false;
                 
                 // For nodes with siblings, place text on opposite sides to prevent overlaps
@@ -1179,7 +1186,7 @@ function generateExplainVisualization() {
                     const siblingIndex = siblings.indexOf(d);
                     const totalSiblings = siblings.length;
                     
-                    // FIXED: Better logic for branching nodes - use opposite sides consistently
+                    // FIXED: Advanced logic for branching nodes with maximum spacing
                     if (totalSiblings > 1) {
                         // For even number of siblings: left, right, left, right...
                         // For odd number: left, right, center, left, right...
@@ -1206,7 +1213,7 @@ function generateExplainVisualization() {
                     isLeftSide = d.x < width / 2;
                 }
                 
-                // FIXED: Better depth-based positioning to prevent overlaps
+                // FIXED: Advanced depth-based positioning to prevent overlaps
                 if (d.depth > 1) {
                     // For deeper levels, alternate sides based on depth to create visual hierarchy
                     isLeftSide = (d.depth % 2 === 0) ? !isLeftSide : isLeftSide;
@@ -1216,30 +1223,35 @@ function generateExplainVisualization() {
                     xOffset = -xOffset;
                 }
                 
-                // Reduced randomness for more predictable positioning
-                const randomOffset = (Math.random() - 0.5) * 2; // Reduced randomness
-                yOffset += randomOffset;
-                
-                // Improved depth offset with better spacing
-                const depthOffset = d.depth * 1.0; // Reduced for tighter grouping
+                // FIXED: Maximum depth offset for better separation
+                const depthOffset = d.depth * 5.0; // Much larger depth offset
                 yOffset += depthOffset;
                 
-                // FIXED: Enhanced sibling offset to prevent overlaps
+                // FIXED: Maximum sibling offset to prevent overlaps
                 if (d.parent && d.parent.children) {
                     const siblingIndex = d.parent.children.indexOf(d);
                     const totalSiblings = d.parent.children.length;
                     if (totalSiblings > 1) {
-                        const siblingOffset = (siblingIndex - (totalSiblings - 1) / 2) * 1.2; // Increased for better separation
+                        const siblingOffset = (siblingIndex - (totalSiblings - 1) / 2) * 6.0; // Much larger sibling offset
                         yOffset += siblingOffset;
                     }
                 }
                 
-                // FIXED: Better text type offset to prevent overlap between operation and metrics
+                // FIXED: Maximum text type offset to prevent overlap between operation and metrics
                 if (textType === 'metrics') {
-                    yOffset += 1.5; // Increased offset for metrics
+                    yOffset += 6.0; // Much larger offset for metrics
                 } else if (textType === 'indicators') {
-                    yOffset += 3.0; // Increased offset for indicators
+                    yOffset += 8.0; // Much larger offset for indicators
                 }
+                
+                // FIXED: Enhanced position-based offset to prevent overlaps
+                const positionOffset = (d.x % 200) * 0.2; // Larger offset based on x position
+                yOffset += positionOffset;
+                
+                // FIXED: Add unique identifier offset to prevent overlaps
+                const nodeId = d.data.operation ? d.data.operation.length : 0;
+                const idOffset = (nodeId % 50) * 0.3; // Offset based on operation name length
+                yOffset += idOffset;
                 
                 return {
                     x: xOffset,
@@ -1269,9 +1281,9 @@ function generateExplainVisualization() {
                 .attr("x", d => calculateTextPosition(d, 'operation').x)
                 .style("text-anchor", d => calculateTextPosition(d, 'operation').anchor)
                 .text(d => {
-                    // Truncate long operation names to prevent overlap
+                    // FIXED: More aggressive truncation to prevent overlap
                     const operation = d.data.operation;
-                    return operation.length > 20 ? operation.substring(0, 18) + "..." : operation;
+                    return operation.length > 15 ? operation.substring(0, 13) + "..." : operation;
                 })
                 .style("font-size", "12px")
                 .style("font-weight", "600")
@@ -1316,8 +1328,8 @@ function generateExplainVisualization() {
                     }
                     
                     const metricsText = metrics.join(" | ");
-                    // Truncate very long metric strings to prevent overlap
-                    return metricsText.length > 40 ? metricsText.substring(0, 37) + "..." : metricsText;
+                    // FIXED: More aggressive truncation to prevent overlap
+                    return metricsText.length > 25 ? metricsText.substring(0, 22) + "..." : metricsText;
                 })
                 .style("font-size", "10px")
                 .style("fill", "#6b7280")
@@ -1388,142 +1400,35 @@ function generateExplainVisualization() {
                     return tooltip;
                 });
 
-            // Create compact legend outside the container
-            const legendContainer = d3.select(container.parentNode).append("div")
-                .style("position", "absolute")
-                .style("top", "20px") // Position at top right of parent container
-                .style("right", "20px")
-                .style("width", "250px")
-                .style("background", "rgba(255, 255, 255, 0.95)")
-                .style("border", "2px solid #e5e7eb")
-                .style("border-radius", "10px")
-                .style("padding", "12px")
-                .style("box-shadow", "0 6px 24px rgba(0, 0, 0, 0.1)")
-                .style("z-index", "100")
-                .style("backdrop-filter", "blur(10px)")
-                .style("max-height", "250px") // Limit height
-                .style("overflow-y", "auto"); // Make scrollable if needed
+            // REMOVED: Legend creation code - now handled in HTML template
 
-            // Legend title
-            legendContainer.append("div")
-                .style("font-size", "14px")
-                .style("font-weight", "bold")
-                .style("color", "#1f2937")
-                .style("margin-bottom", "10px")
-                .style("text-align", "center")
-                .text("Performance Legend");
-
-            // Performance levels
-            legendContainer.append("div")
-                .style("font-size", "12px")
-                .style("font-weight", "600")
-                .style("color", "#374151")
-                .style("margin-bottom", "6px")
-                .text("Performance Levels:");
-
-            const performanceLevels = [
-                { color: "#10b981", label: "Low Cost/Time" },
-                { color: "#f59e0b", label: "Medium Cost/Time" },
-                { color: "#ef4444", label: "High Cost/Time" }
-            ];
-
-            performanceLevels.forEach((item, i) => {
-                const legendItem = legendContainer.append("div")
-                    .style("display", "flex")
-                    .style("align-items", "center")
-                    .style("margin-bottom", "4px");
-
-                legendItem.append("div")
-                    .style("width", "12px")
-                    .style("height", "12px")
-                    .style("border-radius", "50%")
-                    .style("background", item.color)
-                    .style("border", "1px solid #ffffff")
-                    .style("margin-right", "8px")
-                    .style("box-shadow", "0 1px 3px rgba(0,0,0,0.1)");
-
-                legendItem.append("span")
-                    .style("font-size", "10px")
-                    .style("color", "#374151")
-                    .text(item.label);
-            });
-
-            // Add operation type indicators
-            legendContainer.append("div")
-                .style("font-size", "12px")
-                .style("font-weight", "600")
-                .style("color", "#374151")
-                .style("margin-top", "10px")
-                .style("margin-bottom", "6px")
-                .text("Operation Types:");
-
-            const operationTypes = [
-                { pattern: "none", label: "CPU Operations" },
-                { pattern: "4,4", label: "I/O Operations" }
-            ];
-
-            operationTypes.forEach((item, i) => {
-                const legendItem = legendContainer.append("div")
-                    .style("display", "flex")
-                    .style("align-items", "center")
-                    .style("margin-bottom", "4px");
-
-                legendItem.append("div")
-                    .style("width", "12px")
-                    .style("height", "12px")
-                    .style("border-radius", "50%")
-                    .style("background", "#3b82f6")
-                    .style("border", "1px solid #ffffff")
-                    .style("border-style", item.pattern === "none" ? "solid" : "dashed")
-                    .style("margin-right", "8px")
-                    .style("box-shadow", "0 1px 3px rgba(0,0,0,0.1)");
-
-                legendItem.append("span")
-                    .style("font-size", "10px")
-                    .style("color", "#374151")
-                    .text(item.label);
-            });
-
-            // Add performance indicators section
-            legendContainer.append("div")
-                .style("font-size", "12px")
-                .style("font-weight", "600")
-                .style("color", "#374151")
-                .style("margin-top", "10px")
-                .style("margin-bottom", "6px")
-                .text("Performance Indicators:");
-
-            const indicators = [
-                { symbol: "🔥", label: "Performance Hotspot" },
-                { symbol: "💾", label: "I/O Heavy Operation" },
-                { symbol: "⏱️", label: "Slow Operation" },
-                { symbol: "📋", label: "Full Table Scan (Needs Index)" },
-                { symbol: "🔍", label: "Scan Operation (Review Index)" }
-            ];
-
-            indicators.forEach((item, i) => {
-                const legendItem = legendContainer.append("div")
-                    .style("display", "flex")
-                    .style("align-items", "center")
-                    .style("margin-bottom", "4px");
-
-                legendItem.append("span")
-                    .style("font-size", "10px")
-                    .style("color", "#dc2626")
-                    .style("font-weight", "bold")
-                    .style("margin-right", "8px")
-                    .text(item.symbol);
-
-                legendItem.append("span")
-                    .style("font-size", "10px")
-                    .style("color", "#374151")
-                    .text(item.label);
-            });
-
+            // FIXED: Set initial zoom/pan to center the visualization properly
+            setTimeout(() => {
+                // FIXED: Better initial positioning to center the visualization properly
+                const renderedBounds = contentGroup.node().getBBox();
+                const containerRect = container.getBoundingClientRect();
+                
+                // Calculate the scale to fit the tree in the container
+                const scaleX = (containerRect.width * 0.85) / Math.max(renderedBounds.width, 1);
+                const scaleY = (containerRect.height * 0.85) / Math.max(renderedBounds.height, 1);
+                const initialScale = Math.min(scaleX, scaleY, 1);
+                
+                // FIXED: Better centering calculation to prevent right-side drift
+                const centerX = (containerRect.width - renderedBounds.width * initialScale) / 2 - renderedBounds.x * initialScale;
+                const centerY = (containerRect.height - renderedBounds.height * initialScale) / 2 - renderedBounds.y * initialScale;
+                
+                // Apply the initial transform with proper centering
+                const initialTransform = d3.zoomIdentity
+                    .translate(centerX, centerY)
+                    .scale(initialScale);
+                
+                svg.call(zoom.transform, initialTransform);
+            }, 150); // Increased delay to ensure rendering is complete
+            
             // Add visualization controls
             addVisualizationControls(vizContainer, container);
             
-            // Add interaction hint
+            // IMPROVED: Add interaction hint with better positioning
             const interactionHint = d3.select(container).append("div")
                 .style("position", "absolute")
                 .style("top", "10px")
@@ -1538,7 +1443,7 @@ function generateExplainVisualization() {
                 .style("box-shadow", "0 2px 8px rgba(0,0,0,0.2)")
                 .style("pointer-events", "none")
                 .style("opacity", "0.9")
-                .text("🖱️ Drag to move • Scroll to zoom • Click buttons for controls");
+                .text("🖱️ Drag to pan • Scroll to zoom • Click buttons for controls");
             
             // Auto-hide interaction hint after 5 seconds
             setTimeout(() => {
@@ -1605,71 +1510,20 @@ function generateExplainVisualization() {
                 margin: margin
             });
 
-            // Add zoom behavior with proper containment - FIXED: Improved dragging constraints
+            // FIXED: Improved zoom behavior with better centering and drag constraints
             const zoom = d3.zoom()
-                .scaleExtent([0.2, 5])
-                .translateExtent([[-width * 0.5, -height * 0.5], [width * 1.5, height * 1.5]]) // FIXED: Allow more dragging space
+                .scaleExtent([0.2, 4]) // Increased max zoom for better visibility
+                .translateExtent([[-width * 3, -height * 3], [width * 4, height * 4]]) // Much larger drag area
                 .on("zoom", (event) => {
-                    // Apply transform to the content group
-                    contentGroup.attr("transform", `translate(${margin.left},${margin.top}) ${event.transform}`);
+                    // Apply transform with proper margins and better centering
+                    const transform = event.transform;
+                    contentGroup.attr("transform", `translate(${margin.left},${margin.top}) scale(${transform.k}) translate(${transform.x},${transform.y})`);
                 });
 
             vizContainer.select("svg").call(zoom);
             
-            // Add controlled drag behavior
-            let isDragging = false;
-            let startX, startY;
-            
-            vizContainer.select("svg")
-                .on("mousedown", function(event) {
-                    if (event.button === 0) { // Left mouse button only
-                        isDragging = true;
-                        startX = event.clientX;
-                        startY = event.clientY;
-                        vizContainer.style("cursor", "grabbing");
-                    }
-                })
-                .on("mousemove", function(event) {
-                    if (isDragging) {
-                        const deltaX = event.clientX - startX;
-                        const deltaY = event.clientY - startY;
-                        
-                        // Get current transform
-                        const currentTransform = contentGroup.attr("transform");
-                        const match = currentTransform.match(/translate\(([^,]+),\s*([^)]+)\)/);
-                        
-                        if (match) {
-                            const currentX = parseFloat(match[1]) + deltaX;
-                            const currentY = parseFloat(match[2]) + deltaY;
-                            
-                            // Apply new transform with constraints
-                            const constrainedX = Math.max(-width * 2, Math.min(width * 2, currentX));
-                            const constrainedY = Math.max(-height * 2, Math.min(height * 2, currentY));
-                            
-                            contentGroup.attr("transform", `translate(${constrainedX},${constrainedY})`);
-                        }
-                        
-                        startX = event.clientX;
-                        startY = event.clientY;
-                    }
-                })
-                .on("mouseup", function() {
-                    isDragging = false;
-                    vizContainer.style("cursor", "grab");
-                })
-                .on("mouseleave", function() {
-                    isDragging = false;
-                    vizContainer.style("cursor", "grab");
-                });
-            
-            // Set initial cursor
+            // Set initial cursor for better UX
             vizContainer.style("cursor", "grab");
-            
-            // FIXED: Set initial zoom position to center the flowchart properly
-            const containerWidth = container.clientWidth;
-            const containerHeight = container.clientHeight;
-            const initialTransform = d3.zoomIdentity.translate(containerWidth * 0.1, containerHeight * 0.1).scale(0.4);
-            contentGroup.attr("transform", `translate(${margin.left},${margin.top}) ${initialTransform}`);
             
             console.log("Compact tree zoom behavior added");
 
@@ -1756,11 +1610,26 @@ function generateExplainVisualization() {
                 return bounds;
             }, {x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity});
 
-            // Calculate centering transform with better positioning - FIXED: Center the flowchart properly
+            // FIXED: Better centering calculation for compact tree to prevent right-side orientation
             const treeWidth = treeBounds.x1 - treeBounds.x0;
             const treeHeight = treeBounds.y1 - treeBounds.y0;
-            const centerX = (width * 0.5) - (treeBounds.x0 + treeWidth * 0.5); // Center the tree properly
-            const centerY = Math.max(20, (height - treeHeight) / 2 - treeBounds.y0); // Ensure minimum top margin
+            
+            // Calculate scale to fit the tree in the container with margins
+            const availableWidth = width - margin.left - margin.right;
+            const availableHeight = height - margin.top - margin.bottom;
+            const scaleX = availableWidth / Math.max(treeWidth, 1);
+            const scaleY = availableHeight / Math.max(treeHeight, 1);
+            const scale = Math.min(scaleX, scaleY, 0.9); // Increased scale for better visibility
+            
+            // FIXED: Better centering calculation to prevent right-side drift
+            const centerX = (width - treeWidth * scale) / 2;
+            const centerY = (height - treeHeight * scale) / 2;
+
+            // Apply scaling and centering transform to all nodes
+            treeData2.descendants().forEach(d => {
+                d.x = (d.x - treeBounds.x0) * scale + centerX;
+                d.y = (d.y - treeBounds.y0) * scale + centerY;
+            });
             
             console.log("Compact tree bounds:", treeBounds);
             console.log("Compact tree positioning:", {treeWidth, treeHeight, centerX, centerY});
@@ -1883,17 +1752,17 @@ function generateExplainVisualization() {
 
                     // FIX: IMPROVED compact text positioning function with better branch handling
         function calculateCompactTextPosition(d, textType) {
-            const baseOffset = 25 * complexityMultiplier; // Reduced for better association
+            const baseOffset = 40 * complexityMultiplier; // Much larger base offset
             const verticalSpacing = {
                 'operation': 0,
-                'metrics': 1.0 * complexityMultiplier, // Reduced spacing
-                'indicators': 2.5 * complexityMultiplier // Reduced spacing
+                'metrics': 2.5 * complexityMultiplier, // Much larger spacing
+                'indicators': 4.0 * complexityMultiplier // Much larger spacing
             };
             
             let xOffset = baseOffset;
             let yOffset = verticalSpacing[textType] || 0;
             
-            // FIX: IMPROVED side determination for better branch clarity
+            // FIXED: Advanced side determination for better branch clarity
             let isLeftSide = false;
             
             // For nodes with siblings, place text on opposite sides
@@ -1902,7 +1771,7 @@ function generateExplainVisualization() {
                 const siblingIndex = siblings.indexOf(d);
                 const totalSiblings = siblings.length;
                 
-                // FIX: Better logic for branching nodes - use opposite sides consistently
+                // FIXED: Advanced logic for branching nodes - use opposite sides consistently
                 if (totalSiblings > 1) {
                     // For even number of siblings: left, right, left, right...
                     // For odd number: left, right, center, left, right...
@@ -1938,28 +1807,35 @@ function generateExplainVisualization() {
                 xOffset = -xOffset;
             }
             
-            // Reduced randomness for more predictable positioning
-            const randomOffset = (Math.random() - 0.5) * 0.5; // Further reduced randomness
-            yOffset += randomOffset;
-            
-            // Improved depth offset with better spacing
-            const depthOffset = d.depth * 0.5; // Reduced for tighter grouping
+            // FIXED: Maximum depth offset for better separation
+            const depthOffset = d.depth * 2.0; // Much larger depth offset
             yOffset += depthOffset;
             
-            // Enhanced sibling offset to prevent overlaps
+            // FIXED: Maximum sibling offset to prevent overlaps
             if (d.parent && d.parent.children) {
                 const siblingIndex = d.parent.children.indexOf(d);
                 const totalSiblings = d.parent.children.length;
                 if (totalSiblings > 1) {
-                    const siblingOffset = (siblingIndex - (totalSiblings - 1) / 2) * 0.3; // Reduced for closer positioning
+                    const siblingOffset = (siblingIndex - (totalSiblings - 1) / 2) * 3.0; // Much larger sibling offset
                     yOffset += siblingOffset;
                 }
             }
             
-            // Additional offset based on text type to prevent overlap between operation and metrics
+            // FIXED: Maximum text type offset to prevent overlap between operation and metrics
             if (textType === 'metrics') {
-                yOffset += 0.5; // Small additional offset for metrics
+                yOffset += 2.5; // Much larger offset for metrics
+            } else if (textType === 'indicators') {
+                yOffset += 3.5; // Much larger offset for indicators
             }
+            
+            // FIXED: Enhanced position-based offset to prevent overlaps
+            const positionOffset = (d.x % 100) * 0.2; // Larger offset based on x position
+            yOffset += positionOffset;
+            
+            // FIXED: Add unique identifier offset to prevent overlaps
+            const nodeId = d.data.operation ? d.data.operation.length : 0;
+            const idOffset = (nodeId % 30) * 0.4; // Offset based on operation name length
+            yOffset += idOffset;
             
             return {
                 x: xOffset,
@@ -2123,138 +1999,31 @@ function generateExplainVisualization() {
                     return tooltip;
                 });
 
-            // Create compact legend
-            const legendContainer = d3.select(container.parentNode).append("div")
-                .style("position", "absolute")
-                .style("top", "20px") // Position at top right of parent container
-                .style("right", "20px")
-                .style("width", "250px")
-                .style("background", "rgba(255, 255, 255, 0.95)")
-                .style("border", "2px solid #e5e7eb")
-                .style("border-radius", "10px")
-                .style("padding", "12px")
-                .style("box-shadow", "0 6px 24px rgba(0, 0, 0, 0.1)")
-                .style("z-index", "100")
-                .style("backdrop-filter", "blur(10px)")
-                .style("max-height", "250px") // Limit height
-                .style("overflow-y", "auto"); // Make scrollable if needed
+            // REMOVED: Performance Legend - now available as static content on results page
 
-            // Legend title
-            legendContainer.append("div")
-                .style("font-size", "14px")
-                .style("font-weight", "bold")
-                .style("color", "#1f2937")
-                .style("margin-bottom", "10px")
-                .style("text-align", "center")
-                .text("Performance Legend");
-
-            // Performance levels
-            legendContainer.append("div")
-                .style("font-size", "12px")
-                .style("font-weight", "600")
-                .style("color", "#374151")
-                .style("margin-bottom", "6px")
-                .text("Performance Levels:");
-
-            const performanceLevels = [
-                { color: "#10b981", label: "Low Cost/Time" },
-                { color: "#f59e0b", label: "Medium Cost/Time" },
-                { color: "#ef4444", label: "High Cost/Time" }
-            ];
-
-            performanceLevels.forEach((item, i) => {
-                const legendItem = legendContainer.append("div")
-                    .style("display", "flex")
-                    .style("align-items", "center")
-                    .style("margin-bottom", "4px");
-
-                legendItem.append("div")
-                    .style("width", "12px")
-                    .style("height", "12px")
-                    .style("border-radius", "50%")
-                    .style("background", item.color)
-                    .style("border", "1px solid #ffffff")
-                    .style("margin-right", "8px")
-                    .style("box-shadow", "0 1px 3px rgba(0,0,0,0.1)");
-
-                legendItem.append("span")
-                    .style("font-size", "10px")
-                    .style("color", "#374151")
-                    .text(item.label);
-            });
-
-            // Add operation type indicators
-            legendContainer.append("div")
-                .style("font-size", "12px")
-                .style("font-weight", "600")
-                .style("color", "#374151")
-                .style("margin-top", "10px")
-                .style("margin-bottom", "6px")
-                .text("Operation Types:");
-
-            const operationTypes = [
-                { pattern: "none", label: "CPU Operations" },
-                { pattern: "4,4", label: "I/O Operations" }
-            ];
-
-            operationTypes.forEach((item, i) => {
-                const legendItem = legendContainer.append("div")
-                    .style("display", "flex")
-                    .style("align-items", "center")
-                    .style("margin-bottom", "4px");
-
-                legendItem.append("div")
-                    .style("width", "12px")
-                    .style("height", "12px")
-                    .style("border-radius", "50%")
-                    .style("background", "#3b82f6")
-                    .style("border", "1px solid #ffffff")
-                    .style("border-style", item.pattern === "none" ? "solid" : "dashed")
-                    .style("margin-right", "8px")
-                    .style("box-shadow", "0 1px 3px rgba(0,0,0,0.1)");
-
-                legendItem.append("span")
-                    .style("font-size", "10px")
-                    .style("color", "#374151")
-                    .text(item.label);
-            });
-
-            // Add performance indicators section
-            legendContainer.append("div")
-                .style("font-size", "12px")
-                .style("font-weight", "600")
-                .style("color", "#374151")
-                .style("margin-top", "10px")
-                .style("margin-bottom", "6px")
-                .text("Performance Indicators:");
-
-            const indicators = [
-                { symbol: "🔥", label: "Performance Hotspot" },
-                { symbol: "💾", label: "I/O Heavy Operation" },
-                { symbol: "⏱️", label: "Slow Operation" },
-                { symbol: "📋", label: "Full Table Scan (Needs Index)" },
-                { symbol: "🔍", label: "Scan Operation (Review Index)" }
-            ];
-
-            indicators.forEach((item, i) => {
-                const legendItem = legendContainer.append("div")
-                    .style("display", "flex")
-                    .style("align-items", "center")
-                    .style("margin-bottom", "4px");
-
-                legendItem.append("span")
-                    .style("font-size", "10px")
-                    .style("color", "#dc2626")
-                    .style("font-weight", "bold")
-                    .style("margin-right", "8px")
-                    .text(item.symbol);
-
-                legendItem.append("span")
-                    .style("font-size", "10px")
-                    .style("color", "#374151")
-                    .text(item.label);
-            });
-
+            // FIXED: Set initial zoom/pan to center the visualization properly
+            setTimeout(() => {
+                // FIXED: Better initial positioning to center the visualization properly
+                const renderedBounds = contentGroup.node().getBBox();
+                const containerRect = container.getBoundingClientRect();
+                
+                // Calculate the scale to fit the tree in the container
+                const scaleX = (containerRect.width * 0.85) / Math.max(renderedBounds.width, 1);
+                const scaleY = (containerRect.height * 0.85) / Math.max(renderedBounds.height, 1);
+                const initialScale = Math.min(scaleX, scaleY, 1);
+                
+                // FIXED: Better centering calculation to prevent right-side drift
+                const centerX = (containerRect.width - renderedBounds.width * initialScale) / 2 - renderedBounds.x * initialScale;
+                const centerY = (containerRect.height - renderedBounds.height * initialScale) / 2 - renderedBounds.y * initialScale;
+                
+                // Apply the initial transform with proper centering
+                const initialTransform = d3.zoomIdentity
+                    .translate(centerX, centerY)
+                    .scale(initialScale);
+                
+                vizContainer.select("svg").call(zoom.transform, initialTransform);
+            }, 150); // Increased delay to ensure rendering is complete
+            
             // Add visualization controls
             addVisualizationControls(vizContainer, container);
             
@@ -2302,7 +2071,27 @@ function generateExplainVisualization() {
                 .on("click", function(event) {
                     event.preventDefault();
                     event.stopPropagation();
-                    resetZoom();
+                    // FIXED: Proper fit to screen functionality
+                    const svg = vizContainer.select("svg");
+                    const contentGroup = svg.select("g");
+                    const containerRect = container.getBoundingClientRect();
+                    const renderedBounds = contentGroup.node().getBBox();
+                    
+                    // Calculate the scale to fit the tree in the container
+                    const scaleX = (containerRect.width * 0.85) / Math.max(renderedBounds.width, 1);
+                    const scaleY = (containerRect.height * 0.85) / Math.max(renderedBounds.height, 1);
+                    const initialScale = Math.min(scaleX, scaleY, 1);
+                    
+                    // Calculate the translation to center the tree
+                    const centerX = (containerRect.width - renderedBounds.width * initialScale) / 2 - renderedBounds.x * initialScale;
+                    const centerY = (containerRect.height - renderedBounds.height * initialScale) / 2 - renderedBounds.y * initialScale;
+                    
+                    // Apply the initial transform
+                    const initialTransform = d3.zoomIdentity
+                        .translate(centerX, centerY)
+                        .scale(initialScale);
+                    
+                    svg.call(svg.attr("data-zoom").transform, initialTransform);
                 });
 
             // Zoom In button
@@ -2318,10 +2107,10 @@ function generateExplainVisualization() {
                     event.preventDefault();
                     event.stopPropagation();
                     const svg = vizContainer.select("svg");
-                    const zoom = d3.zoom().on("zoom", (event) => {
-                        svg.select("g").attr("transform", event.transform);
-                    });
-                    svg.call(zoom.scaleBy, 1.5);
+                    const zoom = svg.attr("data-zoom");
+                    if (zoom) {
+                        svg.call(zoom.scaleBy, 1.5);
+                    }
                 });
 
             // Zoom Out button
@@ -2337,10 +2126,29 @@ function generateExplainVisualization() {
                     event.preventDefault();
                     event.stopPropagation();
                     const svg = vizContainer.select("svg");
-                    const zoom = d3.zoom().on("zoom", (event) => {
-                        svg.select("g").attr("transform", event.transform);
-                    });
-                    svg.call(zoom.scaleBy, 0.75);
+                    const zoom = svg.attr("data-zoom");
+                    if (zoom) {
+                        svg.call(zoom.scaleBy, 0.75);
+                    }
+                });
+
+            // Reset View button
+            controlsContainer.append("button")
+                .attr("type", "button")
+                .attr("class", "btn btn-outline-secondary btn-sm")
+                .style("font-size", "11px")
+                .style("padding", "4px 8px")
+                .style("border-radius", "6px")
+                .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)")
+                .text("Reset View")
+                .on("click", function(event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const svg = vizContainer.select("svg");
+                    const zoom = svg.attr("data-zoom");
+                    if (zoom) {
+                        svg.call(zoom.transform, d3.zoomIdentity);
+                    }
                 });
 
             // Export PNG button
@@ -3234,60 +3042,35 @@ function loadSampleData() {
                 const contentGroup = svg.select("g");
                 if (contentGroup.empty()) return;
                 
-                const zoom = d3.zoom().on("zoom", (event) => {
-                    const margin = {left: 300, top: 60}; // Default margins
-                    contentGroup.attr("transform", `translate(${margin.left},${margin.top}) ${event.transform}`);
-                });
+                // Get the existing zoom behavior
+                const zoom = svg.attr("data-zoom");
+                if (!zoom) return;
                 
-                // Calculate proper fit to screen
+                // Calculate proper fit to screen with margins
                 const containerWidth = container.clientWidth;
                 const containerHeight = container.clientHeight;
                 
                 // Get the actual content bounds
-                const nodes = contentGroup.selectAll(".node");
-                if (nodes.empty()) return;
+                const renderedBounds = contentGroup.node().getBBox();
                 
-                let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-                nodes.each(function() {
-                    const transform = d3.select(this).attr("transform");
-                    if (transform) {
-                        const match = transform.match(/translate\(([^,]+),\s*([^)]+)\)/);
-                        if (match) {
-                            const x = parseFloat(match[1]);
-                            const y = parseFloat(match[2]);
-                            minX = Math.min(minX, x);
-                            maxX = Math.max(maxX, x);
-                            minY = Math.min(minY, y);
-                            maxY = Math.max(maxY, y);
-                        }
-                    }
-                });
+                // Calculate the scale to fit the tree in the container with margins
+                const margin = {left: 50, right: 50, top: 50, bottom: 50};
+                const availableWidth = containerWidth - margin.left - margin.right;
+                const availableHeight = containerHeight - margin.top - margin.bottom;
+                const scaleX = availableWidth / Math.max(renderedBounds.width, 1);
+                const scaleY = availableHeight / Math.max(renderedBounds.height, 1);
+                const initialScale = Math.min(scaleX, scaleY, 0.8); // Don't scale up, only down
                 
-                // If we couldn't get bounds from transforms, use a default approach
-                if (minX === Infinity) {
-                    // Fallback to container-based centering
-                    const margin = {left: 300, top: 60};
-                    const transform = d3.zoomIdentity.translate(containerWidth * 0.5, containerHeight * 0.5).scale(0.6);
-                    contentGroup.attr("transform", `translate(${margin.left},${margin.top}) ${transform}`);
-                    return;
-                }
+                // Calculate the translation to center the tree within available space
+                const centerX = (containerWidth - renderedBounds.width * initialScale) / 2 - renderedBounds.x * initialScale;
+                const centerY = (containerHeight - renderedBounds.height * initialScale) / 2 - renderedBounds.y * initialScale;
                 
-                // Calculate content dimensions
-                const contentWidth = maxX - minX;
-                const contentHeight = maxY - minY;
+                // Apply the reset transform using the existing zoom behavior
+                const resetTransform = d3.zoomIdentity
+                    .translate(centerX, centerY)
+                    .scale(initialScale);
                 
-                // Calculate scale to fit
-                const scaleX = containerWidth / contentWidth;
-                const scaleY = containerHeight / contentHeight;
-                const scale = Math.min(scaleX, scaleY, 1) * 0.8; // 80% of fit scale
-                
-                // Calculate center position
-                const centerX = (containerWidth - contentWidth * scale) / 2;
-                const centerY = (containerHeight - contentHeight * scale) / 2;
-                
-                const margin = {left: 300, top: 60};
-                const transform = d3.zoomIdentity.translate(centerX, centerY).scale(scale);
-                contentGroup.attr("transform", `translate(${margin.left},${margin.top}) ${transform}`);
+                svg.call(zoom.transform, resetTransform);
             }
         }
 
@@ -3300,3 +3083,24 @@ function loadSampleData() {
                 });
             }
         }
+
+// Store EXPLAIN plan data for results page visualization
+function storeExplainPlanData() {
+    const explainText = document.getElementById('explain_plan_textarea')?.value || '';
+    const dbEngine = document.getElementById('db_engine_select')?.value || 'postgresql';
+    
+    if (explainText) {
+        sessionStorage.setItem('explain_plan_text', explainText);
+        sessionStorage.setItem('db_engine', dbEngine);
+    }
+}
+
+// Add event listener to store data when form is submitted
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.querySelector('form[action="/analyze"]');
+    if (form) {
+        form.addEventListener('submit', storeExplainPlanData);
+    }
+});
+
+

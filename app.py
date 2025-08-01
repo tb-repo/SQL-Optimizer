@@ -1130,7 +1130,8 @@ def index():
                              history=session['history'],
                              sql_query=form.sql_query.data,
                              tables=tables,
-                             indexes=indexes)
+                             indexes=indexes,
+                             explain_plan=explain_plan)
     return render_template('index.html', form=form, cleared=cleared)
 
 @app.route('/result')
