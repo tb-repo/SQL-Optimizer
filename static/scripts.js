@@ -1428,6 +1428,41 @@ function generateExplainVisualization() {
             // Add visualization controls
             addVisualizationControls(vizContainer, container);
             
+            // Details panel for node info (detailed mode)
+            const detailsPanel = d3.select(container).append("div")
+                .attr("class", "plan-details-panel")
+                .style("position", "absolute")
+                .style("top", "10px")
+                .style("right", "10px")
+                .style("max-width", "320px")
+                .style("background", "rgba(255,255,255,0.95)")
+                .style("border", "1px solid rgba(0,0,0,0.1)")
+                .style("border-radius", "6px")
+                .style("padding", "8px 10px")
+                .style("box-shadow", "0 2px 8px rgba(0,0,0,0.1)")
+                .html("<div style='font-weight:600;margin-bottom:4px;'>Node Details</div><div class='small text-muted'>Click a node to see details</div>");
+
+            node.on("click", (event, d) => {
+                event.stopPropagation();
+                const data = d.data || {};
+                const safe = (v) => (v === undefined || v === null ? "—" : v);
+                detailsPanel.html(`
+                    <div style="font-weight:600;margin-bottom:6px;">${safe(data.operation)}</div>
+                    <div class="small">
+                        <div><strong>Cost:</strong> ${safe(Number(data.cost)?.toFixed?.(2) ?? data.cost)}</div>
+                        <div><strong>Rows:</strong> ${safe(data.rows)}</div>
+                        ${data.time ? `<div><strong>Time:</strong> ${Number(data.time).toFixed(2)} ms</div>` : ''}
+                        ${data.table_name ? `<div><strong>Table:</strong> ${data.table_name}</div>` : ''}
+                        ${data.filter ? `<div><strong>Filter:</strong> <code>${data.filter}</code></div>` : ''}
+                        ${data.join_condition ? `<div><strong>Join:</strong> <code>${data.join_condition}</code></div>` : ''}
+                    </div>
+                `);
+            });
+
+            d3.select(container).on("click", () => {
+                detailsPanel.html("<div style='font-weight:600;margin-bottom:4px;'>Node Details</div><div class='small text-muted'>Click a node to see details</div>");
+            });
+            
             // IMPROVED: Add interaction hint with better positioning
             const interactionHint = d3.select(container).append("div")
                 .style("position", "absolute")
@@ -1845,30 +1880,30 @@ function generateExplainVisualization() {
             };
         }
 
-            // Enhanced connecting line - closer and more visible
-            node.append("line")
-                .attr("class", "text-connector")
-                .attr("x1", 0)
-                .attr("y1", 0)
-                .attr("x2", d => calculateCompactTextPosition(d, 'operation').x)
-                .attr("y2", d => calculateCompactTextPosition(d, 'operation').y * 12)
-                .style("stroke", "#374151")
-                .style("stroke-width", "2px") // Thicker line for better visibility
-                .style("stroke-dasharray", "2,2") // Smaller dash pattern
-                .style("opacity", "0.8") // Higher opacity for better visibility
-                .style("z-index", "10")
-                .style("pointer-events", "none");
+            // Remove long connector lines in compact mode to reduce clutter
+            // Labels will be placed closer to nodes
+            // node.append("line")
+            //     .attr("class", "text-connector")
+            //     .attr("x1", 0)
+            //     .attr("y1", 0)
+            //     .attr("x2", d => calculateCompactTextPosition(d, 'operation').x)
+            //     .attr("y2", d => calculateCompactTextPosition(d, 'operation').y * 12)
+            //     .style("stroke", "#374151")
+            //     .style("stroke-width", "2px")
+            //     .style("stroke-dasharray", "2,2")
+            //     .style("opacity", "0.8")
+            //     .style("z-index", "10")
+            //     .style("pointer-events", "none");
 
             // Simplified operation labels with cleaner styling
             node.append("text")
                 .attr("class", "operation-label-compact")
-                .attr("dy", d => calculateCompactTextPosition(d, 'operation').y + "em")
-                .attr("x", d => calculateCompactTextPosition(d, 'operation').x)
-                .style("text-anchor", d => calculateCompactTextPosition(d, 'operation').anchor)
+                .attr("dy", d => 0)
+                .attr("x", d => (d.parent ? (d.parent.children && d.parent.children.length > 1 ? (d.parent.children.indexOf(d) % 2 === 0 ? -24 : 24) : 24) : 24))
+                .style("text-anchor", d => (d.parent && d.parent.children && d.parent.children.length > 1 ? (d.parent.children.indexOf(d) % 2 === 0 ? "end" : "start") : "start"))
                 .text(d => {
-                    // More aggressive truncation for cleaner look
                     const operation = d.data.operation;
-                    return operation.length > 15 ? operation.substring(0, 12) + "..." : operation;
+                    return operation.length > 18 ? operation.substring(0, 16) + "..." : operation;
                 })
                 .style("font-size", "10px") // Smaller font
                 .style("font-weight", "600")
@@ -1884,9 +1919,10 @@ function generateExplainVisualization() {
             // Metrics text without indicators (separated for better clarity)
             node.append("text")
                 .attr("class", "metrics-compact")
-                .attr("dy", d => calculateCompactTextPosition(d, 'metrics').y + "em")
-                .attr("x", d => calculateCompactTextPosition(d, 'metrics').x)
-                .style("text-anchor", d => calculateCompactTextPosition(d, 'metrics').anchor)
+                .attr("dy", d => 1.6 + "em")
+                .attr("x", d => (d.parent ? (d.parent.children && d.parent.children.length > 1 ? (d.parent.children.indexOf(d) % 2 === 0 ? -24 : 24) : 24) : 24))
+                .style("text-anchor", d => (d.parent && d.parent.children && d.parent.children.length > 1 ? (d.parent.children.indexOf(d) % 2 === 0 ? "end" : "start") : "start"))
+                .style("display", "none")
                 .text(d => {
                     let metrics = [];
                     
@@ -1924,9 +1960,10 @@ function generateExplainVisualization() {
             // Separate performance indicators with proper spacing
             node.append("text")
                 .attr("class", "performance-indicators-compact")
-                .attr("dy", d => calculateCompactTextPosition(d, 'indicators').y + "em")
-                .attr("x", d => calculateCompactTextPosition(d, 'indicators').x)
-                .style("text-anchor", d => calculateCompactTextPosition(d, 'indicators').anchor)
+                .attr("dy", d => -1.4 + "em")
+                .attr("x", d => (d.parent ? (d.parent.children && d.parent.children.length > 1 ? (d.parent.children.indexOf(d) % 2 === 0 ? -24 : 24) : 24) : 24))
+                .style("text-anchor", d => (d.parent && d.parent.children && d.parent.children.length > 1 ? (d.parent.children.indexOf(d) % 2 === 0 ? "end" : "start") : "start"))
+                .style("display", "none")
                 .text(d => {
                     let indicators = [];
                     
@@ -2027,6 +2064,41 @@ function generateExplainVisualization() {
             // Add visualization controls
             addVisualizationControls(vizContainer, container);
             
+            // Details panel for node info (compact mode)
+            const detailsPanelCompact = d3.select(container).append("div")
+                .attr("class", "plan-details-panel")
+                .style("position", "absolute")
+                .style("top", "10px")
+                .style("right", "10px")
+                .style("max-width", "320px")
+                .style("background", "rgba(255,255,255,0.95)")
+                .style("border", "1px solid rgba(0,0,0,0.1)")
+                .style("border-radius", "6px")
+                .style("padding", "8px 10px")
+                .style("box-shadow", "0 2px 8px rgba(0,0,0,0.1)")
+                .html("<div style='font-weight:600;margin-bottom:4px;'>Node Details</div><div class='small text-muted'>Click a node to see details</div>");
+
+            node.on("click", (event, d) => {
+                event.stopPropagation();
+                const data = d.data || {};
+                const safe = (v) => (v === undefined || v === null ? "—" : v);
+                detailsPanelCompact.html(`
+                    <div style="font-weight:600;margin-bottom:6px;">${safe(data.operation)}</div>
+                    <div class="small">
+                        <div><strong>Cost:</strong> ${safe(Number(data.cost)?.toFixed?.(2) ?? data.cost)}</div>
+                        <div><strong>Rows:</strong> ${safe(data.rows)}</div>
+                        ${data.time ? `<div><strong>Time:</strong> ${Number(data.time).toFixed(2)} ms</div>` : ''}
+                        ${data.table_name ? `<div><strong>Table:</strong> ${data.table_name}</div>` : ''}
+                        ${data.filter ? `<div><strong>Filter:</strong> <code>${data.filter}</code></div>` : ''}
+                        ${data.join_condition ? `<div><strong>Join:</strong> <code>${data.join_condition}</code></div>` : ''}
+                    </div>
+                `);
+            });
+
+            d3.select(container).on("click", () => {
+                detailsPanelCompact.html("<div style='font-weight:600;margin-bottom:4px;'>Node Details</div><div class='small text-muted'>Click a node to see details</div>");
+            });
+
             // Add keyboard shortcut for reset view
             const handleKeyPress = (event) => {
                 if (event.key === 'r' || event.key === 'R') {
@@ -3077,10 +3149,10 @@ function loadSampleData() {
         function toggleMetrics() {
             const container = document.getElementById('d3-visualization');
             if (container) {
-                const metricsElements = container.querySelectorAll('.metrics, .performance-indicators');
-                metricsElements.forEach(el => {
-                    el.style.display = el.style.display === 'none' ? 'block' : 'none';
-                });
+                            const metricsElements = container.querySelectorAll('.metrics, .performance-indicators, .metrics-compact, .performance-indicators-compact');
+            metricsElements.forEach(el => {
+                el.style.display = el.style.display === 'none' ? 'block' : 'none';
+            });
             }
         }
 
